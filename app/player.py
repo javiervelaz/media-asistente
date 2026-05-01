@@ -110,3 +110,7 @@ def get_status() -> dict:
 
 def clear_playlist() -> None:
     _send_command(["playlist-clear"])
+
+def set_video(enabled: bool) -> None:
+    """Activa o desactiva el track de video del archivo actual"""
+    _send_command(["set_property", "vid", "auto" if enabled else "no"])

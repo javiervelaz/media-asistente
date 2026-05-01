@@ -18,6 +18,7 @@ from app.player import (
     play_url,
     prev_track,
     resume,
+    set_video,
     set_volume,
     stop,
 )
@@ -41,6 +42,8 @@ class PlaylistRequest(BaseModel):
 class VolumeRequest(BaseModel):
     level: int
 
+class VideoRequest(BaseModel):
+    url: str
 
 # === Endpoints públicos (sin auth, solo health) ===
 
@@ -53,7 +56,7 @@ async def health():
 
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
 async def create_playlist(req: PlaylistRequest):
-    """Genera una playlist con IA y la reproduce"""
+    """Genera una playlist con IA y la reproduce (solo audio)"""
     try:
         data = generate_playlist(req.prompt)
     except Exception as e:
@@ -67,6 +70,7 @@ async def create_playlist(req: PlaylistRequest):
     if req.play_now:
         try:
             clear_playlist()
+            set_video(False)  # música = sin video
             play_url(tracks[0]["url"], replace=True)
             for t in tracks[1:]:
                 enqueue_url(t["url"])
@@ -139,5 +143,19 @@ async def ctl_volume(req: VolumeRequest):
 async def status():
     try:
         return get_status()
+    except MPVError as e:
+        raise HTTPException(503, str(e))
+
+
+
+
+@app.post("/play_video", dependencies=[Depends(verify_api_key)])
+async def play_video(req: VideoRequest):
+    """Reproduce un video con audio + imagen en HDMI"""
+    try:
+        clear_playlist()
+        set_video(True)
+        play_url(req.url, replace=True)
+        return {"ok": True, "playing": req.url}
     except MPVError as e:
         raise HTTPException(503, str(e))
