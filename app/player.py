@@ -54,10 +54,6 @@ def _send_command(command: list[Any], timeout: float = 2.0) -> dict:
     return {}
 
 
-def play_url(url: str, replace: bool = True) -> None:
-    mode = "replace" if replace else "append-play"
-    _send_command(["loadfile", url, mode])
-
 
 def enqueue_url(url: str) -> None:
     _send_command(["loadfile", url, "append-play"])
@@ -114,3 +110,9 @@ def clear_playlist() -> None:
 def set_video(enabled: bool) -> None:
     """Activa o desactiva el track de video del archivo actual"""
     _send_command(["set_property", "vid", "auto" if enabled else "no"])
+
+def play_url(url: str, replace: bool = True) -> None:
+    mode = "replace" if replace else "append-play"
+    _send_command(["loadfile", url, mode])
+    # Aseguramos que arranca sonando aunque venga de un estado pausado
+    _send_command(["set_property", "pause", False])
