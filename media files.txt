@@ -1,0 +1,55 @@
+systemctl --user restart media-api
+
+curl -X POST http://localhost:8000/playlist \
+  -H "X-API-Key: esto-es-una-joda" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "rock alternativo de los 90s, 15 tracks"}'
+
+curl -X POST http://localhost:8000/control/next -H "X-API-Key: esto-es-una-joda"
+
+curl -X POST http://localhost:8000/play_video \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
+
+
+curl -X POST https://media.countercrm.com/play_video \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=p47fEXGabaY"}'
+
+curl https://media.countercrm.com/status \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+
+CF-Access-Client-Id: 7ea9bcebbc6770d53b415c9365c01093.access
+
+CF-Access-Client-Secret: f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a
+
+$headers = @{
+    "CF-Access-Client-Id" = "7ea9bcebbc6770d53b415c9365c01093.access"
+    "CF-Access-Client-Secret" = "f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+    "X-API-Key" = "kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+}
+
+Invoke-RestMethod -Uri "https://media.countercrm.com/health" -Headers $headers
+
+$headers = @{
+     "CF-Access-Client-Id" = "7ea9bcebbc6770d53b415c9365c01093.access"
+    "CF-Access-Client-Secret" = "f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+    "X-API-Key" = "kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+
+    "Content-Type" = "application/json"
+}
+$body = '{"prompt": "tango clasico de los 40s"}'
+
+Invoke-RestMethod -Uri "https://media.countercrm.com/playlist" `
+    -Method POST -Headers $headers -Body $body
+
+
+Use this token to access the HTTP API:
+8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78
+
+chat id: 937324746
+
+{"ok":true,"result":[{"update_id":935523050,
+"message":{"message_id":4,"from":{"id":937324746,"is_bot":false,"first_name":"javier","last_name":"velazquez","username":"javiervelazquez","language_code":"en"},"chat":{"id":937324746,"first_name":"javier","last_name":"velazquez","username":"javiervelazquez","type":"private"},"date":1777653235,"text":"ssss"}}]}

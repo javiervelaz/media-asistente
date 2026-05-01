@@ -84,6 +84,26 @@ async def create_playlist(req: PlaylistRequest):
         "tracks": tracks,
     }
 
+def _process_playlist_background(prompt: str):
+    try:
+        data = generate_playlist(prompt)
+        tracks = resolve_tracks(data["tracks"])
+        if not tracks:
+            logger.warning(f"No tracks resueltos para: {prompt}")
+            return
+        # 1) limpio cola actual
+        clear_playlist()
+        # 2) sin video para música
+        set_video(False)
+        # 3) cargo el primero (esto arranca la reproducción)
+        play_url(tracks[0]["url"], replace=True)
+        # 4) encolo el resto
+        for t in tracks[1:]:
+            enqueue_url(t["url"])
+        logger.info(f"Playlist '{data.get('title')}' lista, {len(tracks)} tracks")
+    except Exception:
+        logger.exception("Error en playlist background")
+
 
 @app.post("/control/play", dependencies=[Depends(verify_api_key)])
 async def ctl_play():

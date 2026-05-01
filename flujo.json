@@ -1,0 +1,369 @@
+{
+  "name": "Media Pi - Telegram Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 400],
+      "webhookId": "media-pi-bot",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR_TELEGRAM_CRED_ID",
+          "name": "Media Pi Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "auth-check",
+              "leftValue": "={{ $json.message?.from?.id || $json.callback_query?.from?.id }}",
+              "rightValue": "={{ $env.N8N_TELEGRAM_ALLOWED_CHAT_ID }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "auth-filter",
+      "name": "Auth Filter",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.callback_query?.data }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "callback"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "^/",
+                    "operator": {
+                      "type": "string",
+                      "operation": "regex"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "command"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "playlist_prompt"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "unsupported"
+        }
+      },
+      "id": "router",
+      "name": "Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_MEDIA_API_URL }}/playlist",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.N8N_MEDIA_API_KEY }}"
+            },
+            {
+              "name": "CF-Access-Client-Id",
+              "value": "={{ $env.N8N_CF_CLIENT_ID }}"
+            },
+            {
+              "name": "CF-Access-Client-Secret",
+              "value": "={{ $env.N8N_CF_CLIENT_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"{{ $('Telegram Trigger').item.json.message.text.replace(/\"/g, '\\\\\"') }}\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "create-playlist",
+      "name": "Create Playlist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=✅ *{{ $json.title }}*\n\n🎵 Sonando: _{{ $json.first_track.artist }} - {{ $json.first_track.title }}_\n\n📀 Cola: {{ $json.queued }} tracks",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={\n  \"inline_keyboard\": [\n    [\n      {\"text\": \"⏯ Pause\", \"callback_data\": \"pause\"},\n      {\"text\": \"⏭ Next\", \"callback_data\": \"next\"},\n      {\"text\": \"⏮ Prev\", \"callback_data\": \"prev\"}\n    ],\n    [\n      {\"text\": \"🔊 +\", \"callback_data\": \"vol_up\"},\n      {\"text\": \"🔉 -\", \"callback_data\": \"vol_down\"},\n      {\"text\": \"⏹ Stop\", \"callback_data\": \"stop\"}\n    ]\n  ]\n}"
+        }
+      },
+      "id": "reply-playlist",
+      "name": "Reply Playlist Created",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1120, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR_TELEGRAM_CRED_ID",
+          "name": "Media Pi Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mapear callback_data o /comando a endpoint y método de la API\nconst input = $input.item.json;\n\nconst command = input.callback_query?.data ?? input.message?.text?.replace(/^\\//, '').split(' ')[0];\n\nconst commandMap = {\n  play:     { path: '/control/play',   method: 'POST', body: null },\n  pause:    { path: '/control/pause',  method: 'POST', body: null },\n  next:     { path: '/control/next',   method: 'POST', body: null },\n  prev:     { path: '/control/prev',   method: 'POST', body: null },\n  stop:     { path: '/control/stop',   method: 'POST', body: null },\n  status:   { path: '/status',         method: 'GET',  body: null },\n  vol_up:   { path: '/control/volume', method: 'POST', body: { level_delta: 10 } },\n  vol_down: { path: '/control/volume', method: 'POST', body: { level_delta: -10 } },\n};\n\nconst action = commandMap[command];\n\nif (!action) {\n  return { json: { error: `Comando no reconocido: ${command}`, command } };\n}\n\nreturn {\n  json: {\n    command,\n    path: action.path,\n    method: action.method,\n    body: action.body,\n    chat_id: input.message?.chat?.id ?? input.callback_query?.message?.chat?.id,\n    callback_query_id: input.callback_query?.id ?? null\n  }\n};"
+        },
+        "id": "command-mapper",
+        "name": "Map Command to API",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $env.N8N_MEDIA_API_URL }}{{ $json.path }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.N8N_MEDIA_API_KEY }}"
+            },
+            {
+              "name": "CF-Access-Client-Id",
+              "value": "={{ $env.N8N_CF_CLIENT_ID }}"
+            },
+            {
+              "name": "CF-Access-Client-Secret",
+              "value": "={{ $env.N8N_CF_CLIENT_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": "={{ $json.body !== null }}",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "send-control",
+      "name": "Send Control to API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Map Command to API').item.json.chat_id }}",
+        "text": "=✅ Comando ejecutado: `{{ $('Map Command to API').item.json.command }}`\n\nEstado: {{ $json.title || $json.ok || 'OK' }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "reply-control",
+      "name": "Reply Control Done",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1340, 400],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR_TELEGRAM_CRED_ID",
+          "name": "Media Pi Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=⛔ No reconozco ese tipo de mensaje. Probá:\n\n• Texto libre → genera playlist\n• /pause /play /next /prev /stop /status\n• Botones inline después de crear una playlist",
+        "additionalFields": {}
+      },
+      "id": "reply-unsupported",
+      "name": "Reply Unsupported",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR_TELEGRAM_CRED_ID",
+          "name": "Media Pi Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Auth Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth Filter": {
+      "main": [
+        [
+          {
+            "node": "Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router": {
+      "main": [
+        [
+          {
+            "node": "Map Command to API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Map Command to API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Playlist",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply Unsupported",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Playlist": {
+      "main": [
+        [
+          {
+            "node": "Reply Playlist Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Command to API": {
+      "main": [
+        [
+          {
+            "node": "Send Control to API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Control to API": {
+      "main": [
+        [
+          {
+            "node": "Reply Control Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
