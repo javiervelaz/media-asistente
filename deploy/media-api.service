@@ -1,0 +1,14 @@
+[Unit]
+Description=Media Asistente FastAPI backend
+After=network.target mpv-player.service
+Requires=mpv-player.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/javier/media-asistente
+ExecStart=/home/javier/media-asistente/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

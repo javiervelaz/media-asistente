@@ -1,5 +1,6 @@
 """Búsqueda de tracks en YouTube Music"""
 import logging
+import asyncio
 
 from ytmusicapi import YTMusic
 
@@ -49,3 +50,44 @@ def resolve_tracks(tracks: list[dict]) -> list[dict]:
             logger.info(f"Skip: {t['artist']} - {t['title']}")
     logger.info(f"Resueltos {len(resolved)}/{len(tracks)} tracks")
     return resolved
+
+async def ramp_volume(target: int, seconds: float, steps: int = 30):
+    """Rampa lineal de volumen vía IPC mpv."""
+    try:
+        cur = await mpv_get_property("volume")  # tu helper IPC actual
+    except Exception:
+        cur = 0
+    cur = int(cur or 0)
+    delta = (target - cur) / steps
+    for i in range(1, steps + 1):
+        vol = int(cur + delta * i)
+        await mpv_command(["set_property", "volume", max(0, min(100, vol))])
+        await asyncio.sleep(seconds / steps)
+
+
+async def start_playlist(tracks: list[str], fade: bool = False,
+                         target_vol: int = 70):
+    if not tracks:
+        return
+
+    if fade:
+        # ¿hay algo sonando? Si sí, lo bajamos antes de pisar la cola.
+        try:
+            idle = await mpv_get_property("core-idle")  # True = no reproduce
+        except Exception:
+            idle = True
+        if not idle:
+            await ramp_volume(0, seconds=3)
+
+        await mpv_command(["set_property", "volume", 0])  # arrancar en silencio
+
+    # carga de cola (tu lógica de siempre)
+    await mpv_command(["loadfile", tracks[0], "replace"])
+    for t in tracks[1:]:
+        await mpv_command(["loadfile", t, "append"])
+    await mpv_command(["set_property", "pause", False])   # quirk conocido tuyo
+
+    if fade:
+        await ramp_volume(target_vol, seconds=30)         # fade-in lento de despertador
+    else:
+        await mpv_command(["set_property", "volume", target_vol])
