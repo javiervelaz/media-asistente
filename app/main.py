@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.auth import verify_api_key
@@ -51,27 +51,55 @@ class VideoRequest(BaseModel):
     url: str
 
 
-# === Helpers ===
+# === Fade: tarea única, rastreada y cancelable ===
+
+_fade_task: "asyncio.Task | None" = None
+
+
+def _cancel_fade() -> None:
+    """Cancela la rampa de volumen en curso, si hay una."""
+    global _fade_task
+    if _fade_task and not _fade_task.done():
+        _fade_task.cancel()
+    _fade_task = None
+
+
+def _start_fade(target: int, seconds: int) -> None:
+    global _fade_task
+    _cancel_fade()
+    _fade_task = asyncio.create_task(_fade_in(target, seconds))
+
 
 async def _fade_in(target: int, seconds: int = 30, steps: int = 30):
-    """Rampa de volumen 0 -> target, sin bloquear el event loop.
-
-    Corre como BackgroundTask: la respuesta HTTP ya salió y la música
-    suena en volumen 0 mientras esta corrutina la sube de a poco.
-    """
+    """Rampa 0 -> target sin bloquear el loop. Cancelable por cualquier control."""
     target = max(0, min(100, target))
+    seconds = max(1, seconds)
     steps = max(1, steps)
-    for i in range(1, steps + 1):
-        level = round(target * i / steps)
-        try:
-            set_volume(level)
-        except MPVError:
-            logger.warning("fade-in: mpv no disponible, corto la rampa")
-            return
-        await asyncio.sleep(seconds / steps)
+    try:
+        for i in range(1, steps + 1):
+            level = round(target * i / steps)
+            await asyncio.to_thread(set_volume, level)   # I/O de mpv fuera del loop
+            await asyncio.sleep(seconds / steps)
+        logger.info("fade-in completo a volumen %d", target)
+    except asyncio.CancelledError:
+        logger.info("fade-in cancelado por un control")
+        raise
+    except Exception:
+        logger.exception("fade-in abortado por error en set_volume")
 
 
-# === Endpoints públicos (sin auth, solo health) ===
+def _start_playback(tracks: list, fade: bool) -> None:
+    """Secuencia de carga (sincrónica). Se invoca vía asyncio.to_thread."""
+    clear_playlist()
+    set_video(False)                 # música = sin video
+    if fade:
+        set_volume(0)                # silencio antes de soltar el primer track
+    play_url(tracks[0]["url"], replace=True)
+    for t in tracks[1:]:
+        enqueue_url(t["url"])
+
+
+# === Endpoints públicos ===
 
 @app.get("/health")
 async def health():
@@ -81,33 +109,27 @@ async def health():
 # === Endpoints protegidos ===
 
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
-async def create_playlist(req: PlaylistRequest, background: BackgroundTasks):
+async def create_playlist(req: PlaylistRequest):
     """Genera una playlist con IA y la reproduce (solo audio)"""
     try:
-        data = generate_playlist(req.prompt)
+        data = await asyncio.to_thread(generate_playlist, req.prompt)
     except Exception as e:
         logger.exception("LLM error")
         raise HTTPException(500, f"LLM error: {e}")
 
-    tracks = resolve_tracks(data["tracks"])
+    tracks = await asyncio.to_thread(resolve_tracks, data["tracks"])
     if not tracks:
         raise HTTPException(404, "No track could be resolved on YouTube")
 
     if req.play_now:
+        _cancel_fade()               # cualquier playlist nueva mata un fade previo
         try:
-            if req.fade:
-                set_volume(0)  # arrancar en silencio antes de cargar
-            clear_playlist()
-            set_video(False)  # música = sin video
-            play_url(tracks[0]["url"], replace=True)
-            for t in tracks[1:]:
-                enqueue_url(t["url"])
+            await asyncio.to_thread(_start_playback, tracks, req.fade)
         except MPVError as e:
             raise HTTPException(503, f"Player not available: {e}")
 
-        # La rampa sube el volumen DESPUÉS de responder, sin bloquear.
         if req.fade:
-            background.add_task(_fade_in, req.fade_target, req.fade_seconds)
+            _start_fade(req.fade_target, req.fade_seconds)
 
     return {
         "title": data.get("title"),
@@ -118,31 +140,10 @@ async def create_playlist(req: PlaylistRequest, background: BackgroundTasks):
     }
 
 
-def _process_playlist_background(prompt: str):
-    try:
-        data = generate_playlist(prompt)
-        tracks = resolve_tracks(data["tracks"])
-        if not tracks:
-            logger.warning(f"No tracks resueltos para: {prompt}")
-            return
-        # 1) limpio cola actual
-        clear_playlist()
-        # 2) sin video para música
-        set_video(False)
-        # 3) cargo el primero (esto arranca la reproducción)
-        play_url(tracks[0]["url"], replace=True)
-        # 4) encolo el resto
-        for t in tracks[1:]:
-            enqueue_url(t["url"])
-        logger.info(f"Playlist '{data.get('title')}' lista, {len(tracks)} tracks")
-    except Exception:
-        logger.exception("Error en playlist background")
-
-
 @app.post("/control/play", dependencies=[Depends(verify_api_key)])
 async def ctl_play():
     try:
-        resume()
+        await asyncio.to_thread(resume)
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -150,8 +151,9 @@ async def ctl_play():
 
 @app.post("/control/pause", dependencies=[Depends(verify_api_key)])
 async def ctl_pause():
+    _cancel_fade()
     try:
-        pause()
+        await asyncio.to_thread(pause)
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -159,8 +161,9 @@ async def ctl_pause():
 
 @app.post("/control/next", dependencies=[Depends(verify_api_key)])
 async def ctl_next():
+    _cancel_fade()
     try:
-        next_track()
+        await asyncio.to_thread(next_track)
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -168,8 +171,9 @@ async def ctl_next():
 
 @app.post("/control/prev", dependencies=[Depends(verify_api_key)])
 async def ctl_prev():
+    _cancel_fade()
     try:
-        prev_track()
+        await asyncio.to_thread(prev_track)
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -177,8 +181,9 @@ async def ctl_prev():
 
 @app.post("/control/stop", dependencies=[Depends(verify_api_key)])
 async def ctl_stop():
+    _cancel_fade()                   # primero matás la rampa, después parás
     try:
-        stop()
+        await asyncio.to_thread(stop)
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -186,8 +191,9 @@ async def ctl_stop():
 
 @app.post("/control/volume", dependencies=[Depends(verify_api_key)])
 async def ctl_volume(req: VolumeRequest):
+    _cancel_fade()                   # si el usuario toca volumen, el fade cede
     try:
-        set_volume(req.level)
+        await asyncio.to_thread(set_volume, req.level)
         return {"ok": True, "level": req.level}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -196,7 +202,7 @@ async def ctl_volume(req: VolumeRequest):
 @app.get("/status", dependencies=[Depends(verify_api_key)])
 async def status():
     try:
-        return get_status()
+        return await asyncio.to_thread(get_status)
     except MPVError as e:
         raise HTTPException(503, str(e))
 
@@ -204,10 +210,15 @@ async def status():
 @app.post("/play_video", dependencies=[Depends(verify_api_key)])
 async def play_video(req: VideoRequest):
     """Reproduce un video con audio + imagen en HDMI"""
+    _cancel_fade()
     try:
-        clear_playlist()
-        set_video(True)
-        play_url(req.url, replace=True)
+        await asyncio.to_thread(_play_video_sync, req.url)
         return {"ok": True, "playing": req.url}
     except MPVError as e:
         raise HTTPException(503, str(e))
+
+
+def _play_video_sync(url: str) -> None:
+    clear_playlist()
+    set_video(True)
+    play_url(url, replace=True)
