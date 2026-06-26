@@ -1,0 +1,145 @@
+{
+  "name": "Charly - Comando /despertador",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "c-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Charly bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $input.first().json;\nconst text = (msg.message && msg.message.text ? msg.message.text : \"\").trim();\nconst chatId = msg.message && msg.message.chat ? msg.message.chat.id : null;\nconst parts = text.split(/\\s+/);\nconst arg = (parts[1] || \"\").toLowerCase();\n\nlet action, time = null, reply_invalid = null;\nif (!arg) {\n  action = \"status\";\n} else if (arg === \"off\" || arg === \"apagar\") {\n  action = \"off\";\n} else if (/^([01]\\d|2[0-3]):([0-5]\\d)$/.test(arg)) {\n  action = \"set\"; time = arg;\n} else {\n  action = \"invalid\";\n  reply_invalid = \"Formato invalido. Usa: /despertador HH:MM (ej 07:30) o /despertador off\";\n}\n\nlet sql;\nif (action === \"set\") {\n  sql = `UPDATE alarm_config SET alarm_time='${time}', enabled=true, updated_at=now() WHERE id=1 RETURNING alarm_time, enabled;`;\n} else if (action === \"off\") {\n  sql = `UPDATE alarm_config SET enabled=false, updated_at=now() WHERE id=1 RETURNING alarm_time, enabled;`;\n} else {\n  sql = `SELECT alarm_time, enabled FROM alarm_config WHERE id=1;`;\n}\nreturn [{ json: { action, time, chatId, sql, reply_invalid } }];"
+      },
+      "id": "c-parse",
+      "name": "Parsear comando",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "id": "c-pg",
+      "name": "Ejecutar en Neon",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REEMPLAZAR",
+          "name": "Neon - Charly"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parsear comando').first().json;\nconst row = $input.first().json || {};\nconst chatId = p.chatId;\nlet text;\nif (p.action === 'invalid') {\n  text = p.reply_invalid;\n} else if (p.action === 'set') {\n  text = `Despertador programado a las ${row.alarm_time} hs, todos los dias.`;\n} else if (p.action === 'off') {\n  text = `Despertador anulado. No va a sonar hasta que lo vuelvas a programar.`;\n} else {\n  if (row.enabled && row.alarm_time) {\n    text = `Despertador activo a las ${row.alarm_time} hs, todos los dias.\\nCambiar: /despertador HH:MM\\nAnular: /despertador off`;\n  } else {\n    text = `Despertador apagado.\\nProgramar: /despertador HH:MM`;\n  }\n}\nreturn [{ json: { chatId, text } }];"
+      },
+      "id": "c-reply",
+      "name": "Armar respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "c-send",
+      "name": "Responder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        300
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Charly bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parsear comando",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear comando": {
+      "main": [
+        [
+          {
+            "node": "Ejecutar en Neon",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ejecutar en Neon": {
+      "main": [
+        [
+          {
+            "node": "Armar respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar respuesta": {
+      "main": [
+        [
+          {
+            "node": "Responder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

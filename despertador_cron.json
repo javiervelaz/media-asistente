@@ -1,0 +1,116 @@
+{
+  "name": "Charly - Despertador (cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "node-sched",
+      "name": "Cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH fire AS (\n  SELECT 1\n  FROM alarm_config\n  WHERE enabled\n    AND alarm_time = to_char((now() AT TIME ZONE 'America/Argentina/Cordoba'), 'HH24:MI')\n),\nhoy AS (\n  SELECT artist, album, left(release_date, 4) AS year\n  FROM ephemerides\n  WHERE month_day = to_char((now() AT TIME ZONE 'America/Argentina/Cordoba'), 'MM-DD')\n    AND month_day IS NOT NULL\n  ORDER BY weight DESC, random()\n  LIMIT 4\n),\nagg AS (\n  SELECT COALESCE(\n           json_agg(json_build_object('artist', artist, 'album', album, 'year', year)),\n           '[]'::json\n         ) AS albums\n  FROM hoy\n)\nSELECT agg.albums\nFROM agg\nWHERE EXISTS (SELECT 1 FROM fire);",
+        "options": {}
+      },
+      "id": "node-pg",
+      "name": "Es la hora? + efemerides",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REEMPLAZAR",
+          "name": "Neon - Charly"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Llega 1 item SOLO cuando es la hora del despertador (lo garantiza la query).\n// Si no es la hora, este nodo no se ejecuta y el workflow termina sin hacer nada.\nconst item = $input.first().json;\nlet albums = item.albums;\nif (typeof albums === 'string') albums = JSON.parse(albums);\n\nlet prompt;\nif (!albums || albums.length === 0) {\n  // Fallback: ningun disco salio un dia como hoy\n  prompt = \"Crea una playlist Dia Soleado para arrancar la maniana con buena energia.\";\n} else {\n  const discos = albums.map(a => `${a.artist} - ${a.album} (${a.year})`).join(\", \");\n  prompt = `Crea una playlist con los temas mas representativos de estos discos `\n         + `que se lanzaron un dia como hoy: ${discos}. `\n         + `Mezclalos en una sola playlist para despertar de a poco.`;\n}\n\n// IMPORTANTE: 'prompt' debe matchear el campo que espera tu endpoint.\n// Si tu API lee el texto bajo otra clave (ej 'text' o 'message'), renombrala aca.\nreturn [{ json: { prompt, fade: true } }];"
+      },
+      "id": "node-code",
+      "name": "Armar prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://media.countercrm.com/REEMPLAZAR-TU-ENDPOINT",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "node-http",
+      "name": "POST playlist al Pi",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Cada minuto": {
+      "main": [
+        [
+          {
+            "node": "Es la hora? + efemerides",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Es la hora? + efemerides": {
+      "main": [
+        [
+          {
+            "node": "Armar prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar prompt": {
+      "main": [
+        [
+          {
+            "node": "POST playlist al Pi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

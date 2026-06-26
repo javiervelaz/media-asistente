@@ -1,7 +1,8 @@
 """API REST: genera playlists con IA y controla mpv"""
+import asyncio
 import logging
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.auth import verify_api_key
@@ -37,13 +38,38 @@ app = FastAPI(title="Media Asistente", version="0.1.0")
 class PlaylistRequest(BaseModel):
     prompt: str
     play_now: bool = True
+    fade: bool = False              # fade-in suave al arrancar (despertador)
+    fade_target: int = 65           # volumen final de la rampa
+    fade_seconds: int = 30          # duración de la rampa
 
 
 class VolumeRequest(BaseModel):
     level: int
 
+
 class VideoRequest(BaseModel):
     url: str
+
+
+# === Helpers ===
+
+async def _fade_in(target: int, seconds: int = 30, steps: int = 30):
+    """Rampa de volumen 0 -> target, sin bloquear el event loop.
+
+    Corre como BackgroundTask: la respuesta HTTP ya salió y la música
+    suena en volumen 0 mientras esta corrutina la sube de a poco.
+    """
+    target = max(0, min(100, target))
+    steps = max(1, steps)
+    for i in range(1, steps + 1):
+        level = round(target * i / steps)
+        try:
+            set_volume(level)
+        except MPVError:
+            logger.warning("fade-in: mpv no disponible, corto la rampa")
+            return
+        await asyncio.sleep(seconds / steps)
+
 
 # === Endpoints públicos (sin auth, solo health) ===
 
@@ -55,7 +81,7 @@ async def health():
 # === Endpoints protegidos ===
 
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
-async def create_playlist(req: PlaylistRequest):
+async def create_playlist(req: PlaylistRequest, background: BackgroundTasks):
     """Genera una playlist con IA y la reproduce (solo audio)"""
     try:
         data = generate_playlist(req.prompt)
@@ -69,6 +95,8 @@ async def create_playlist(req: PlaylistRequest):
 
     if req.play_now:
         try:
+            if req.fade:
+                set_volume(0)  # arrancar en silencio antes de cargar
             clear_playlist()
             set_video(False)  # música = sin video
             play_url(tracks[0]["url"], replace=True)
@@ -77,12 +105,18 @@ async def create_playlist(req: PlaylistRequest):
         except MPVError as e:
             raise HTTPException(503, f"Player not available: {e}")
 
+        # La rampa sube el volumen DESPUÉS de responder, sin bloquear.
+        if req.fade:
+            background.add_task(_fade_in, req.fade_target, req.fade_seconds)
+
     return {
         "title": data.get("title"),
         "queued": len(tracks),
         "first_track": tracks[0],
         "tracks": tracks,
+        "faded": req.fade and req.play_now,
     }
+
 
 def _process_playlist_background(prompt: str):
     try:
@@ -165,8 +199,6 @@ async def status():
         return get_status()
     except MPVError as e:
         raise HTTPException(503, str(e))
-
-
 
 
 @app.post("/play_video", dependencies=[Depends(verify_api_key)])
