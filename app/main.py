@@ -127,7 +127,7 @@ async def create_playlist(req: PlaylistRequest):
         logger.exception("LLM error")
         raise HTTPException(500, f"LLM error: {e}")
 
-    tracks = await asyncio.to_thread(resolve_tracks, data["tracks"])
+    tracks = await resolve_tracks(data["tracks"])
     if not tracks:
         raise HTTPException(404, "No track could be resolved on YouTube")
 
