@@ -199,7 +199,7 @@ async def _insert_releases(artist_mbid: str, artist_name: str,
         if not fecha:
             continue
 
-       await execute(
+        await execute(
             """
             INSERT INTO releases (mbid, release_group_mbid, artist_mbid, title,
                                   first_release_date, primary_type, secondary_types)
