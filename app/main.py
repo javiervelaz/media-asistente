@@ -2,6 +2,9 @@
 import asyncio
 import logging
 
+from contextlib import asynccontextmanager
+from app.db import init_pool, close_pool
+
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -30,7 +33,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("media-asistente")
 
-app = FastAPI(title="Media Asistente", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_pool()
+    yield
+    await close_pool()
+
+
+app = FastAPI(title="Media Asistente", version="0.2.0", lifespan=lifespan)
 
 
 # === Modelos ===
