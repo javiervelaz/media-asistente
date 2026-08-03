@@ -7,6 +7,7 @@ weight=3 para compatibilidad con el despertador viejo.
 import asyncio
 import logging
 
+from datetime import date
 from app.db import execute, fetch, fetchrow
 from app.musicbrainz import mb
 
@@ -47,16 +48,22 @@ def _year(s: str | None) -> int | None:
     return int(s[:4]) if s and len(s) >= 4 and s[:4].isdigit() else None
 
 
-def _norm_date(s: str | None) -> str | None:
-    """MusicBrainz da '1979', '1979-08' o '1979-08-30'. Normalizamos a ISO."""
+def _norm_date(s: str | None) -> date | None:
+    """MusicBrainz da '1979', '1979-08' o '1979-08-30'. Devolvemos date."""
     if not s:
         return None
     partes = s.split("-")
     if len(partes) == 1:
-        return f"{partes[0]}-01-01"
-    if len(partes) == 2:
-        return f"{s}-01"
-    return s
+        iso = f"{partes[0]}-01-01"
+    elif len(partes) == 2:
+        iso = f"{s}-01"
+    else:
+        iso = s
+    try:
+        return date.fromisoformat(iso)
+    except ValueError:
+        logger.warning("fecha inválida de MB: %r", s)
+        return None
 
 
 def _month_day(raw: str | None) -> str | None:
@@ -192,11 +199,11 @@ async def _insert_releases(artist_mbid: str, artist_name: str,
         if not fecha:
             continue
 
-        await execute(
+       await execute(
             """
             INSERT INTO releases (mbid, release_group_mbid, artist_mbid, title,
                                   first_release_date, primary_type, secondary_types)
-            VALUES ($1,$1,$2,$3,$4::date,$5,$6)
+            VALUES ($1,$1,$2,$3,$4,$5,$6)
             ON CONFLICT (mbid) DO UPDATE SET
               first_release_date = EXCLUDED.first_release_date,
               artist_mbid        = EXCLUDED.artist_mbid,
@@ -217,7 +224,8 @@ async def _insert_releases(artist_mbid: str, artist_name: str,
               mbid         = EXCLUDED.mbid,
               weight       = LEAST(ephemerides.weight, EXCLUDED.weight)
             """,
-            artist_name, rg["title"], fecha, _month_day(raw_date), rg["id"], weight,
+            artist_name, rg["title"], fecha.isoformat(),
+            _month_day(raw_date), rg["id"], weight,
         )
         n += 1
     return n
