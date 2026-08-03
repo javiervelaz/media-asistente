@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import uuid
-
+from app.history import register_advance, set_current
 from app.db import execute as db_execute
 from app.curator import curate
 
@@ -165,6 +165,7 @@ async def create_playlist(req: PlaylistRequest):
             _start_fade(req.fade_target, req.fade_seconds)
 
         asyncio.create_task(_log_history(tracks, req.room_id, playlist_id))
+        set_current(playlist_id, tracks)        # ← nueva línea
 
     return {
         "title": data.get("title"),
@@ -216,6 +217,7 @@ async def ctl_pause():
 @app.post("/control/next", dependencies=[Depends(verify_api_key)])
 async def ctl_next():
     _cancel_fade()
+    await register_advance("next")  
     try:
         await asyncio.to_thread(next_track)
         return {"ok": True}
@@ -226,6 +228,7 @@ async def ctl_next():
 @app.post("/control/prev", dependencies=[Depends(verify_api_key)])
 async def ctl_prev():
     _cancel_fade()
+    await register_advance("prev") 
     try:
         await asyncio.to_thread(prev_track)
         return {"ok": True}
