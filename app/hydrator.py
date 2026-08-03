@@ -72,7 +72,7 @@ async def find_local(name: str) -> list[dict]:
         SELECT mbid, name, country, begin_year, end_year, tags, crawled_at,
                similarity(name, $1) AS sim
         FROM artists
-        WHERE name %% $1 OR lower(name) = lower($1)
+        WHERE name % $1 OR lower(name) = lower($1)
         ORDER BY (lower(name) = lower($1)) DESC, sim DESC
         LIMIT 5
         """,
