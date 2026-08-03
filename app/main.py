@@ -279,3 +279,48 @@ def _play_video_sync(url: str) -> None:
     clear_playlist()
     set_video(True)
     play_url(url, replace=True)
+
+CONTEXT_SQL = """
+SELECT a.name AS artist, r.title, r.first_release_date::text AS fecha,
+       EXTRACT(YEAR FROM r.first_release_date)::int AS anio,
+       (EXTRACT(YEAR FROM CURRENT_DATE)
+        - EXTRACT(YEAR FROM r.first_release_date))::int AS aniversario,
+       CASE WHEN to_char(r.first_release_date,'MM-DD') = to_char(CURRENT_DATE,'MM-DD')
+            THEN 'exacto' ELSE 'cercano' END AS match_type,
+       COALESCE(e.weight, 9) AS weight
+FROM releases r
+JOIN artists a ON a.mbid = r.artist_mbid
+LEFT JOIN ephemerides e ON e.mbid = r.mbid::text
+WHERE r.primary_type = 'Album'
+  AND NOT ('Compilation' = ANY(r.secondary_types))
+  AND ABS(((EXTRACT(DOY FROM r.first_release_date)
+          - EXTRACT(DOY FROM CURRENT_DATE) + 183)::int % 365) - 183) <= 7
+ORDER BY (match_type = 'exacto') DESC,
+         (aniversario % 10 = 0) DESC,
+         COALESCE(e.weight, 9),
+         r.first_release_date
+LIMIT 25;
+"""
+
+
+@app.post("/despertador", dependencies=[Depends(verify_api_key)])
+async def despertador(req: DespertadorRequest):
+    filas = await db_fetch(CONTEXT_SQL)
+    if not filas:
+        raise HTTPException(404, "sin efemérides en la ventana")
+
+    contexto = "\n".join(
+        f"- {r['artist']} — {r['title']} ({r['fecha']}), "
+        f"{r['aniversario']} años, coincidencia {r['match_type']}"
+        for r in filas)
+
+    prompt = f"""Es la mañana temprano. Armá la playlist del despertador.
+
+Álbumes con aniversario esta semana:
+{contexto}
+
+Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exactas de fecha. Arrancá con temas de ese disco y expandí hacia la escena y el momento en que salió. La narración tiene que contar por qué hoy es ese disco: qué pasaba alrededor, quién estaba en esa banda. Empezá suave, es temprano."""
+
+    data = await curate(prompt, req.n_tracks)
+    tracks = await resolve_tracks(data["tracks"])
+    ...  # mismo bloque de reproducción que /playlist, con fade=True
