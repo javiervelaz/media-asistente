@@ -1,6 +1,10 @@
 """API REST: genera playlists con IA y controla mpv"""
 import asyncio
 import logging
+import uuid
+
+from app.db import execute as db_execute
+from app.curator import curate
 
 from contextlib import asynccontextmanager
 from app.db import init_pool, close_pool
@@ -48,9 +52,12 @@ app = FastAPI(title="Media Asistente", version="0.2.0", lifespan=lifespan)
 class PlaylistRequest(BaseModel):
     prompt: str
     play_now: bool = True
-    fade: bool = False              # fade-in suave al arrancar (despertador)
-    fade_target: int = 65           # volumen final de la rampa
-    fade_seconds: int = 30          # duración de la rampa
+    fade: bool = False
+    fade_target: int = 65
+    fade_seconds: int = 30
+    n_tracks: int = 20
+    room_id: str = "main"
+    use_curator: bool | None = None   # None = usa el default de config
 
 
 class VolumeRequest(BaseModel):
@@ -121,18 +128,34 @@ async def health():
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
 async def create_playlist(req: PlaylistRequest):
     """Genera una playlist con IA y la reproduce (solo audio)"""
-    try:
-        data = await asyncio.to_thread(generate_playlist, req.prompt)
-    except Exception as e:
-        logger.exception("LLM error")
-        raise HTTPException(500, f"LLM error: {e}")
+    usar_curador = (settings.curator_enabled
+                    if req.use_curator is None else req.use_curator)
+
+    concept = narration = ""
+
+    if usar_curador:
+        try:
+            data = await curate(req.prompt, req.n_tracks)
+            concept = data.get("concept", "")
+            narration = data.get("narration", "")
+        except Exception:
+            logger.exception("curador falló, cayendo al generador simple")
+            data = await asyncio.to_thread(generate_playlist, req.prompt)
+    else:
+        try:
+            data = await asyncio.to_thread(generate_playlist, req.prompt)
+        except Exception as e:
+            logger.exception("LLM error")
+            raise HTTPException(500, f"LLM error: {e}")
 
     tracks = await resolve_tracks(data["tracks"])
     if not tracks:
         raise HTTPException(404, "No track could be resolved on YouTube")
 
+    playlist_id = uuid.uuid4()
+
     if req.play_now:
-        _cancel_fade()               # cualquier playlist nueva mata un fade previo
+        _cancel_fade()
         try:
             await asyncio.to_thread(_start_playback, tracks, req.fade)
         except MPVError as e:
@@ -141,13 +164,34 @@ async def create_playlist(req: PlaylistRequest):
         if req.fade:
             _start_fade(req.fade_target, req.fade_seconds)
 
+        asyncio.create_task(_log_history(tracks, req.room_id, playlist_id))
+
     return {
         "title": data.get("title"),
+        "concept": concept,
+        "narration": narration,
         "queued": len(tracks),
         "first_track": tracks[0],
         "tracks": tracks,
         "faded": req.fade and req.play_now,
+        "playlist_id": str(playlist_id),
     }
+
+async def _log_history(tracks: list, room_id: str, playlist_id) -> None:
+    """Registra la playlist. No bloquea la respuesta ni la rompe si falla."""
+    try:
+        for t in tracks:
+            await db_execute(
+                """
+                INSERT INTO play_history (recording_mbid, artist, title,
+                                          youtube_id, room_id, playlist_id)
+                VALUES ($1,$2,$3,$4,$5,$6)
+                """,
+                t.get("recording_mbid"), t["artist"], t["title"],
+                t["url"].rsplit("v=", 1)[-1], room_id, playlist_id,
+            )
+    except Exception:
+        logger.exception("no pude registrar el historial")
 
 
 @app.post("/control/play", dependencies=[Depends(verify_api_key)])
