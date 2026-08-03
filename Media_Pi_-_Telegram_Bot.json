@@ -1,0 +1,540 @@
+{
+  "name": "Media Pi - Telegram Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "8ddf15b8-220c-4f4a-b2f6-5fd795a15719",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -656,
+        208
+      ],
+      "webhookId": "media-pi-bot",
+      "credentials": {
+        "telegramApi": {
+          "id": "LLNVpI5vFckdK2cB",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "auth-check",
+              "leftValue": "={{ $json.message?.from?.id || $json.callback_query?.from?.id }}",
+              "rightValue": "=937324746",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "4babce91-9cbb-4f39-b502-83084737d671",
+      "name": "Auth Filter",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -448,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.callback_query?.data }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "callback"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "^/despertador",
+                    "operator": {
+                      "type": "string",
+                      "operation": "regex"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "despertador"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "^/",
+                    "operator": {
+                      "type": "string",
+                      "operation": "regex"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "command"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message?.text }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "playlist_prompt"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "unsupported"
+        }
+      },
+      "id": "a22b8674-495b-4355-88d0-effc3f025739",
+      "name": "Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -224,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://media.countercrm.com/playlist",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+            },
+            {
+              "name": "CF-Access-Client-Id",
+              "value": "=7ea9bcebbc6770d53b415c9365c01093.access"
+            },
+            {
+              "name": "CF-Access-Client-Secret",
+              "value": "=f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"{{ $('Telegram Trigger').item.json.message.text.replace(/\"/g, '\\\\\"') }}\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "98c8ea07-9a7c-4bee-89f8-1247e76f56df",
+      "name": "Create Playlist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=✅ *{{ $json.title }}*\n\n🎵 Sonando: _{{ $json.first_track.artist }} - {{ $json.first_track.title }}_\n\n📀 Cola: {{ $json.queued }} tracks",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "078de714-8df1-4e59-885b-25237ce30add",
+      "name": "Reply Playlist Created",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        0
+      ],
+      "webhookId": "73e359ec-fe11-416b-a321-a3748b9292e3",
+      "credentials": {
+        "telegramApi": {
+          "id": "LLNVpI5vFckdK2cB",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mapear callback_data o /comando a endpoint y método de la API\nconst input = $input.item.json;\n\nconst command = input.callback_query?.data ?? input.message?.text?.replace(/^\\//, '').split(' ')[0];\n\nconst commandMap = {\n  play:     { path: '/control/play',   method: 'POST', body: null },\n  pause:    { path: '/control/pause',  method: 'POST', body: null },\n  next:     { path: '/control/next',   method: 'POST', body: null },\n  prev:     { path: '/control/prev',   method: 'POST', body: null },\n  stop:     { path: '/control/stop',   method: 'POST', body: null },\n  status:   { path: '/status',         method: 'GET',  body: null },\n  vol_up:   { path: '/control/volume', method: 'POST', body: { level_delta: 10 } },\n  vol_down: { path: '/control/volume', method: 'POST', body: { level_delta: -10 } },\n};\n\nconst action = commandMap[command];\n\nif (!action) {\n  return { json: { error: `Comando no reconocido: ${command}`, command } };\n}\n\nreturn {\n  json: {\n    command,\n    path: action.path,\n    method: action.method,\n    body: action.body,\n    chat_id: input.message?.chat?.id ?? input.callback_query?.message?.chat?.id,\n    callback_query_id: input.callback_query?.id ?? null\n  }\n};"
+      },
+      "id": "a0ab0322-54b0-40e0-8059-5141e49bc48d",
+      "name": "Map Command to API",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "=https://media.countercrm.com{{ $json.path }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+            },
+            {
+              "name": "CF-Access-Client-Id",
+              "value": "=7ea9bcebbc6770d53b415c9365c01093.access"
+            },
+            {
+              "name": "CF-Access-Client-Secret",
+              "value": "=f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "7f5119fe-f88b-48ee-be8c-3cd6b7458cad",
+      "name": "Send Control to API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        224,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Map Command to API').item.json.chat_id }}",
+        "text": "=✅ Comando ejecutado: `{{ $('Map Command to API').item.json.command }}`\n\nEstado: {{ $json.title || $json.ok || 'OK' }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "5b0fe5a6-3958-4f13-b444-1000358d9f16",
+      "name": "Reply Control Done",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        448,
+        208
+      ],
+      "webhookId": "b56750fb-2434-4dc4-910f-f3a2e6fbb744",
+      "credentials": {
+        "telegramApi": {
+          "id": "LLNVpI5vFckdK2cB",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=⛔ No reconozco ese tipo de mensaje. Probá:\n\n• Texto libre → genera playlist\n• /pause /play /next /prev /stop /status\n• Botones inline después de crear una playlist",
+        "additionalFields": {}
+      },
+      "id": "3611c9b2-7a8f-489d-9ceb-443fe1dc6265",
+      "name": "Reply Unsupported",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "65f4ea45-dc4e-4bac-a74b-82dd98d2e226",
+      "credentials": {
+        "telegramApi": {
+          "id": "LLNVpI5vFckdK2cB",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.item.json;\nconst text = (input.message?.text || \"\").trim();\nconst chatId = input.message?.chat?.id;\nconst parts = text.split(/\\s+/);\nconst arg = (parts[1] || \"\").toLowerCase();\n\nlet action, time = null, reply_invalid = null;\nif (!arg) {\n  action = 'status';\n} else if (arg === 'off' || arg === 'apagar') {\n  action = 'off';\n} else if (/^([01]\\d|2[0-3]):([0-5]\\d)$/.test(arg)) {\n  action = 'set'; time = arg;\n} else {\n  action = 'invalid';\n  reply_invalid = 'Formato invalido. Usa: /despertador HH:MM (ej 07:30) o /despertador off';\n}\n\nlet sql;\nif (action === 'set') {\n  sql = `UPDATE alarm_config SET alarm_time='${time}', enabled=true, updated_at=now() WHERE id=1 RETURNING alarm_time, enabled;`;\n} else if (action === 'off') {\n  sql = `UPDATE alarm_config SET enabled=false, updated_at=now() WHERE id=1 RETURNING alarm_time, enabled;`;\n} else {\n  sql = `SELECT alarm_time, enabled FROM alarm_config WHERE id=1;`;\n}\n\nreturn { json: { action, time, chatId, sql, reply_invalid } };"
+      },
+      "id": "desp-parse-0001",
+      "name": "Parsear despertador",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      },
+      "id": "desp-neon-0002",
+      "name": "Config despertador (Neon)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        224,
+        600
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REEMPLAZAR_NEON",
+          "name": "Neon - Charly"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parsear despertador').item.json;\nconst row = $input.item.json || {};\nlet text;\nif (p.action === 'invalid') {\n  text = p.reply_invalid;\n} else if (p.action === 'set') {\n  text = `⏰ Despertador programado a las ${row.alarm_time} hs, todos los dias.`;\n} else if (p.action === 'off') {\n  text = `Despertador anulado. No suena hasta que lo vuelvas a programar.`;\n} else {\n  if (row.enabled && row.alarm_time) {\n    text = `⏰ Despertador activo a las ${row.alarm_time} hs, todos los dias.\\nCambiar: /despertador HH:MM\\nAnular: /despertador off`;\n  } else {\n    text = `Despertador apagado.\\nProgramar: /despertador HH:MM`;\n  }\n}\nreturn { json: { chatId: p.chatId, text } };"
+      },
+      "id": "desp-reply-0003",
+      "name": "Armar respuesta despertador",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "desp-send-0004",
+      "name": "Reply Despertador",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        672,
+        600
+      ],
+      "webhookId": "desp-reply-webhook-01",
+      "credentials": {
+        "telegramApi": {
+          "id": "LLNVpI5vFckdK2cB",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Auth Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth Filter": {
+      "main": [
+        [
+          {
+            "node": "Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router": {
+      "main": [
+        [
+          {
+            "node": "Map Command to API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parsear despertador",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Map Command to API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Playlist",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply Unsupported",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Playlist": {
+      "main": [
+        [
+          {
+            "node": "Reply Playlist Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Command to API": {
+      "main": [
+        [
+          {
+            "node": "Send Control to API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Control to API": {
+      "main": [
+        [
+          {
+            "node": "Reply Control Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear despertador": {
+      "main": [
+        [
+          {
+            "node": "Config despertador (Neon)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config despertador (Neon)": {
+      "main": [
+        [
+          {
+            "node": "Armar respuesta despertador",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar respuesta despertador": {
+      "main": [
+        [
+          {
+            "node": "Reply Despertador",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "09d16e94-3c89-457d-87a2-4d923b17d49b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "78083b6aaad7d807b647484ea5a683af591ba1a5f5b2bf32e1af033f2946cea5"
+  },
+  "id": "6AOn6suvXlGWMuY0",
+  "tags": []
+}
