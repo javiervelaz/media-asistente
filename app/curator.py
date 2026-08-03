@@ -1,9 +1,7 @@
 """Curador con tool calling: Claude consulta el grafo antes de armar la playlist"""
 import json
 import logging
-
 from anthropic import AsyncAnthropic
-
 from app.config import settings
 from app.tools import TOOL_IMPL
 
