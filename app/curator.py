@@ -14,15 +14,7 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 MAX_TOKENS = 8192
 MAX_TOOL_RESULT = 4_000   # truncado para no inflar el contexto en cada turno
 
-# System como lista de bloques, con breakpoint de cache
-SYSTEM_BLOCKS = [{
-    "type": "text",
-    "text": SYSTEM,
-    "cache_control": {"type": "ephemeral"},
-}]
 
-# Breakpoint al final de las tools: cachea todos los schemas
-TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 
 TOOLS = [
     {
@@ -159,6 +151,15 @@ Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
 Incluí recording_mbid y length_ms solo si los sacaste de get_recordings. Si no, dejalos en null.
 Mantené cada rationale en una sola frase corta: la respuesta tiene que entrar completa."""
 
+# System como lista de bloques, con breakpoint de cache
+SYSTEM_BLOCKS = [{
+    "type": "text",
+    "text": SYSTEM,
+    "cache_control": {"type": "ephemeral"},
+}]
+
+# Breakpoint al final de las tools: cachea todos los schemas
+TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 
 def _mover_breakpoint(mensajes: list) -> None:
     """Un solo breakpoint móvil sobre el último tool_result.
@@ -184,7 +185,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
     for turno in range(max_turns):
         resp = await client.messages.create(
             model=settings.curator_model,
-            max_tokens=4096,
+            max_tokens=MAX_TOKENS,
             system=SYSTEM_BLOCKS,
             tools=TOOLS,
             messages=mensajes,
