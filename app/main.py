@@ -3,7 +3,7 @@ import asyncio
 import logging
 import uuid
 from app.history import register_advance, set_current
-from app.db import execute as db_execute
+from app.db import execute as db_execute, fetch as db_fetch
 from app.curator import curate
 
 from contextlib import asynccontextmanager
@@ -58,6 +58,13 @@ class PlaylistRequest(BaseModel):
     n_tracks: int = 20
     room_id: str = "main"
     use_curator: bool | None = None   # None = usa el default de config
+
+class DespertadorRequest(BaseModel):
+    n_tracks: int = 15
+    fade: bool = True
+    fade_target: int = 55
+    fade_seconds: int = 60
+    room_id: str = "despertador"
 
 
 class VolumeRequest(BaseModel):
@@ -128,11 +135,7 @@ async def health():
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
 async def create_playlist(req: PlaylistRequest):
     """Genera una playlist con IA y la reproduce (solo audio)"""
-    if req.use_curator is None:
-        usar_curador = settings.curator_enabled and _necesita_curador(req.prompt)
-    else:
-        usar_curador = req.use_curator
-        
+
     usar_curador = (settings.curator_enabled
                     if req.use_curator is None else req.use_curator)
 
@@ -310,6 +313,7 @@ LIMIT 25;
 
 @app.post("/despertador", dependencies=[Depends(verify_api_key)])
 async def despertador(req: DespertadorRequest):
+    """Playlist de la mañana, anclada en aniversarios de esta semana."""
     filas = await db_fetch(CONTEXT_SQL)
     if not filas:
         raise HTTPException(404, "sin efemérides en la ventana")
@@ -317,7 +321,8 @@ async def despertador(req: DespertadorRequest):
     contexto = "\n".join(
         f"- {r['artist']} — {r['title']} ({r['fecha']}), "
         f"{r['aniversario']} años, coincidencia {r['match_type']}"
-        for r in filas)
+        for r in filas
+    )
 
     prompt = f"""Es la mañana temprano. Armá la playlist del despertador.
 
@@ -326,14 +331,36 @@ async def despertador(req: DespertadorRequest):
 
 Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exactas de fecha. Arrancá con temas de ese disco y expandí hacia la escena y el momento en que salió. La narración tiene que contar por qué hoy es ese disco: qué pasaba alrededor, quién estaba en esa banda. Empezá suave, es temprano."""
 
-    data = await curate(prompt, req.n_tracks)
+    try:
+        data = await curate(prompt, req.n_tracks)
+    except Exception as e:
+        logger.exception("curador falló en el despertador")
+        raise HTTPException(502, f"curador: {e}")
+
     tracks = await resolve_tracks(data["tracks"])
-    ...  # mismo bloque de reproducción que /playlist, con fade=True
+    if not tracks:
+        raise HTTPException(404, "no se resolvió ningún track")
 
-SEÑALES_COMPLEJAS = ("parecido", "similar", "tipo", "onda", "genealog",
-                     "relacionado", "influenc", "escena", "sello", "época",
-                     "década", "año", "aniversario", "conexión", "derivado")
+    playlist_id = uuid.uuid4()
 
-def _necesita_curador(prompt: str) -> bool:
-    p = prompt.lower()
-    return any(s in p for s in SEÑALES_COMPLEJAS) or len(p.split()) > 8
+    _cancel_fade()
+    try:
+        await asyncio.to_thread(_start_playback, tracks, req.fade)
+    except MPVError as e:
+        raise HTTPException(503, f"Player not available: {e}")
+
+    if req.fade:
+        _start_fade(req.fade_target, req.fade_seconds)
+
+    asyncio.create_task(_log_history(tracks, req.room_id, playlist_id))
+    set_current(playlist_id, tracks)
+
+    return {
+        "title": data.get("title"),
+        "concept": data.get("concept", ""),
+        "narration": data.get("narration", ""),
+        "queued": len(tracks),
+        "first_track": tracks[0],
+        "faded": req.fade,
+        "playlist_id": str(playlist_id),
+    }
