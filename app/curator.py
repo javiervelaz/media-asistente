@@ -13,80 +13,34 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 TOOLS = [
     {
-        "name": "search_artist",
-        "description": (
-            "Busca un artista por nombre. Si no está en la base local lo trae "
-            "de MusicBrainz y lo incorpora. Devuelve mbid, país, años activos, "
-            "tags y cuántos álbumes hay cargados. Usalo siempre primero para "
-            "obtener el mbid de cualquier artista que menciones."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
-        },
-    },
-    {
         "name": "get_artist_graph",
         "description": (
             "Artistas conectados a uno dado: miembros de banda, side projects, "
             "colaboraciones y productores, con los años de cada vínculo. "
-            "Es la herramienta para playlists genealógicas y para descubrir "
-            "conexiones que no son obvias."
+            "Los side projects aparecen como member_of_band: si dos bandas "
+            "comparten un integrante, están conectadas. Es la herramienta para "
+            "playlists genealógicas y para conexiones que no son obvias."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "mbid": {"type": "string"},
-                "rel_types": {"type": "array", "items": {"type": "string"}},
-                "max_hops": {"type": "integer", "default": 1},
+                "rel_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["member_of_band", "collaboration",
+                                 "producer", "supporting_musician"],
+                    },
+                    "description": "Si lo omitís se usan todos.",
+                },
+                "max_hops": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "2 salta a bandas de compañeros de banda. Ojo con el ruido.",
+                },
             },
             "required": ["mbid"],
-        },
-    },
-    {
-        "name": "query_releases",
-        "description": (
-            "Filtra álbumes de la base por artistas, país, rango de años o tags. "
-            "Devuelve candidatos verificados con fecha de primera edición. "
-            "weight indica procedencia: 1 = colección de vinilos del usuario, "
-            "2 = canon histórico, 3 = descubierto por uso."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "artist_mbids": {"type": "array", "items": {"type": "string"}},
-                "country": {"type": "string", "description": "ISO 2 letras, ej: GB, AR, US"},
-                "year_from": {"type": "integer"},
-                "year_to": {"type": "integer"},
-                "tags": {"type": "array", "items": {"type": "string"}},
-                "limit": {"type": "integer", "default": 50},
-            },
-        },
-    },
-    {
-        "name": "get_recordings",
-        "description": (
-            "Tracklist de un álbum, con mbid y duración de cada track. "
-            "Si no está en la base la trae de MusicBrainz. Incluir el "
-            "recording_mbid y el length_ms en la playlist final mejora mucho "
-            "la precisión de la búsqueda en YouTube."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"release_mbid": {"type": "string"}},
-            "required": ["release_mbid"],
-        },
-    },
-    {
-        "name": "get_play_history",
-        "description": (
-            "Qué se escuchó últimamente y qué se salteó. Usalo para no repetir "
-            "lo de los últimos días y para calibrar el gusto."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {"days": {"type": "integer", "default": 30}},
         },
     },
 ]
@@ -103,6 +57,8 @@ Método:
 3. Si get_artist_graph marca artistas sin discografía cargada y alguno te interesa, traelo con search_artist.
 4. Consultá get_play_history para no repetir lo de los últimos días.
 5. Armá la playlist.
+
+Si get_artist_graph devuelve pocos resultados o ninguno, no completes con artistas de memoria: probá con max_hops=2, o traé con search_artist a los integrantes de la banda y consultá el grafo desde ellos. La gracia está en las conexiones verificadas, no en las asociaciones obvias del género.
 
 Criterios de curaduría:
 - Una playlist tiene una tesis, no es una lista de hits. Buscá el ángulo no obvio.

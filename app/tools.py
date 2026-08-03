@@ -38,11 +38,24 @@ async def search_artist(name: str) -> dict:
         "rango_anios": [stats["desde"], stats["hasta"]],
     }
 
+REL_VALIDOS = {"member_of_band", "collaboration", "producer", "supporting_musician"}
+
+
+def _norm_rel_types(rel_types: list[str] | None) -> list[str]:
+    """El modelo manda 'member of band' o 'side project'. Normalizamos y
+    descartamos lo que no existe en la base."""
+    if not rel_types:
+        return sorted(REL_VALIDOS)
+    limpios = {t.strip().lower().replace(" ", "_").replace("-", "_")
+               for t in rel_types}
+    validos = limpios & REL_VALIDOS
+    return sorted(validos) if validos else sorted(REL_VALIDOS)
+
+
 
 async def get_artist_graph(mbid: str, rel_types: list[str] | None = None,
                            max_hops: int = 1) -> dict:
-    tipos = rel_types or ["member_of_band", "collaboration",
-                          "producer", "supporting_musician"]
+    tipos = _norm_rel_types(rel_types)
     rows = await fetch(
         """
         WITH RECURSIVE walk(mbid, hop) AS (
@@ -70,6 +83,7 @@ async def get_artist_graph(mbid: str, rel_types: list[str] | None = None,
 
     return {
         "conectados": out,
+        "rel_types_usados": tipos,
         "nota": (f"{len(pendientes)} de estos artistas todavía no tienen "
                  "discografía cargada. Si alguno te interesa, llamá "
                  "search_artist con su nombre para traerla."
@@ -126,7 +140,7 @@ async def get_play_history(days: int = 30) -> list[dict]:
                sum(CASE WHEN skipped THEN 1 ELSE 0 END) AS skips,
                max(started_at)::date::text AS ultima
         FROM play_history
-        WHERE started_at > now() - ($1 || ' days')::interval
+        WHERE started_at > now() - make_interval(days => $1)
         GROUP BY artist, title
         ORDER BY max(started_at) DESC
         LIMIT 40
