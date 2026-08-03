@@ -128,6 +128,11 @@ async def health():
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
 async def create_playlist(req: PlaylistRequest):
     """Genera una playlist con IA y la reproduce (solo audio)"""
+    if req.use_curator is None:
+        usar_curador = settings.curator_enabled and _necesita_curador(req.prompt)
+    else:
+        usar_curador = req.use_curator
+        
     usar_curador = (settings.curator_enabled
                     if req.use_curator is None else req.use_curator)
 
@@ -324,3 +329,11 @@ Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exact
     data = await curate(prompt, req.n_tracks)
     tracks = await resolve_tracks(data["tracks"])
     ...  # mismo bloque de reproducción que /playlist, con fade=True
+
+SEÑALES_COMPLEJAS = ("parecido", "similar", "tipo", "onda", "genealog",
+                     "relacionado", "influenc", "escena", "sello", "época",
+                     "década", "año", "aniversario", "conexión", "derivado")
+
+def _necesita_curador(prompt: str) -> bool:
+    p = prompt.lower()
+    return any(s in p for s in SEÑALES_COMPLEJAS) or len(p.split()) > 8

@@ -74,7 +74,7 @@ async def get_artist_graph(mbid: str, rel_types: list[str] | None = None,
         FROM walk w JOIN artists a ON a.mbid = w.mbid
         WHERE w.hop > 0
         ORDER BY w.hop, a.name
-        LIMIT 60
+        LIMIT 30
         """,
         mbid, max_hops, tipos)
 
@@ -96,7 +96,7 @@ async def query_releases(artist_mbids: list[str] | None = None,
                          year_from: int | None = None,
                          year_to: int | None = None,
                          tags: list[str] | None = None,
-                         limit: int = 50) -> list[dict]:
+                         limit: int = 25) -> list[dict]:
     rows = await fetch(
         """
         SELECT r.mbid, r.title, r.first_release_date, r.primary_type,
@@ -117,10 +117,12 @@ async def query_releases(artist_mbids: list[str] | None = None,
         """,
         artist_mbids, country, year_from, year_to, tags, limit)
 
-    return [{**dict(r),
-             "mbid": str(r["mbid"]),
+    return [{"mbid": str(r["mbid"]),
+             "artist": r["artist"],
              "artist_mbid": str(r["artist_mbid"]),
-             "first_release_date": str(r["first_release_date"])}
+             "title": r["title"],
+             "year": str(r["first_release_date"])[:4],   # el año alcanza
+             "w": r["weight"]}                            # nombre corto
             for r in rows]
 
 

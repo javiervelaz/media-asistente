@@ -12,7 +12,17 @@ logger = logging.getLogger(__name__)
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 MAX_TOKENS = 8192
-MAX_TOOL_RESULT = 12_000   # truncado para no inflar el contexto en cada turno
+MAX_TOOL_RESULT = 4_000   # truncado para no inflar el contexto en cada turno
+
+# System como lista de bloques, con breakpoint de cache
+SYSTEM_BLOCKS = [{
+    "type": "text",
+    "text": SYSTEM,
+    "cache_control": {"type": "ephemeral"},
+}]
+
+# Breakpoint al final de las tools: cachea todos los schemas
+TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 
 TOOLS = [
     {
@@ -150,76 +160,70 @@ Incluí recording_mbid y length_ms solo si los sacaste de get_recordings. Si no,
 Mantené cada rationale en una sola frase corta: la respuesta tiene que entrar completa."""
 
 
-async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8) -> dict:
-    """Corre el loop de tool calling y devuelve la playlist parseada."""
-    mensajes: list[dict] = [{
+def _mover_breakpoint(mensajes: list) -> None:
+    """Un solo breakpoint móvil sobre el último tool_result.
+    Cachea todo el prefijo acumulado de la conversación."""
+    for m in mensajes:
+        if isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict):
+                    b.pop("cache_control", None)
+    if mensajes and isinstance(mensajes[-1].get("content"), list):
+        ultimo = mensajes[-1]["content"][-1]
+        if isinstance(ultimo, dict):
+            ultimo["cache_control"] = {"type": "ephemeral"}
+
+
+async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
+    mensajes = [{
         "role": "user",
         "content": f"{prompt}\n\nArmá una playlist de {n_tracks} tracks.",
     }]
+    uso = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
 
     for turno in range(max_turns):
-        try:
-            resp = await client.messages.create(
-                model=settings.curator_model,
-                max_tokens=MAX_TOKENS,
-                system=SYSTEM,
-                tools=TOOLS,
-                messages=mensajes,
-            )
-        except Exception as e:
-            logger.exception("error llamando a la API en el turno %d", turno)
-            raise RuntimeError(f"API de Anthropic: {e}") from e
-
-        logger.info(
-            "turno %d: stop_reason=%s, in=%d out=%d tokens",
-            turno, resp.stop_reason,
-            resp.usage.input_tokens, resp.usage.output_tokens,
+        resp = await client.messages.create(
+            model=settings.curator_model,
+            max_tokens=4096,
+            system=SYSTEM_BLOCKS,
+            tools=TOOLS,
+            messages=mensajes,
         )
 
-        if resp.stop_reason == "max_tokens":
-            raise RuntimeError(
-                f"respuesta truncada en {resp.usage.output_tokens} tokens. "
-                f"Subí MAX_TOKENS (actual: {MAX_TOKENS}) o bajá n_tracks."
-            )
+        u = resp.usage
+        uso["in"]          += u.input_tokens
+        uso["out"]         += u.output_tokens
+        uso["cache_read"]  += getattr(u, "cache_read_input_tokens", 0) or 0
+        uso["cache_write"] += getattr(u, "cache_creation_input_tokens", 0) or 0
 
         mensajes.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason != "tool_use":
+            logger.info("tokens — in:%(in)d out:%(out)d "
+                        "cache_r:%(cache_read)d cache_w:%(cache_write)d", uso)
             return _parse(resp)
 
         resultados = []
         for block in resp.content:
             if block.type != "tool_use":
                 continue
-
             fn = TOOL_IMPL.get(block.name)
             logger.info("tool %s(%s)", block.name, block.input)
-
-            if fn is None:
-                out = {"error": f"tool desconocida: {block.name}"}
-            else:
-                try:
-                    out = await fn(**block.input)
-                except TypeError as e:
-                    logger.error("argumentos inválidos para %s: %s", block.name, e)
-                    out = {"error": f"argumentos inválidos: {e}"}
-                except Exception as e:
-                    logger.exception("tool %s falló", block.name)
-                    out = {"error": str(e)}
-
-            payload = json.dumps(out, default=str, ensure_ascii=False)
-            if len(payload) > MAX_TOOL_RESULT:
-                payload = payload[:MAX_TOOL_RESULT] + '..."[truncado]"'
-                logger.warning("resultado de %s truncado", block.name)
-
+            try:
+                out = await fn(**block.input) if fn else {"error": "tool desconocida"}
+            except Exception as e:
+                logger.exception("tool %s falló", block.name)
+                out = {"error": str(e)}
             resultados.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
-                "content": payload,
+                "content": json.dumps(out, default=str)[:MAX_TOOL_RESULT],
             })
 
         mensajes.append({"role": "user", "content": resultados})
+        _mover_breakpoint(mensajes)
 
+    logger.warning("no convergió — tokens: %s", uso)
     raise RuntimeError(f"el curador no convergió en {max_turns} turnos")
 
 
