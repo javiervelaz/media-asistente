@@ -82,6 +82,17 @@ class VideoRequest(BaseModel):
 
 _fade_task: "asyncio.Task | None" = None
 
+_resto_task: "asyncio.Task | None" = None
+
+
+def _cancel_resto() -> None:
+    """Cancela la resolución en background de la playlist anterior."""
+    global _resto_task
+    if _resto_task and not _resto_task.done():
+        _resto_task.cancel()
+        logger.info("cancelada la resolución en background anterior")
+    _resto_task = None
+
 
 def _cancel_fade() -> None:
     """Cancela la rampa de volumen en curso, si hay una."""
@@ -172,6 +183,7 @@ async def create_playlist(req: PlaylistRequest):
 
     if req.play_now:
         _cancel_fade()
+        _cancel_resto()
         try:
             await asyncio.to_thread(_start_playback, cabeza, req.fade)
         except MPVError as e:
@@ -262,6 +274,7 @@ async def ctl_prev():
 @app.post("/control/stop", dependencies=[Depends(verify_api_key)])
 async def ctl_stop():
     _cancel_fade()                   # primero matás la rampa, después parás
+    _cancel_resto()  
     try:
         await asyncio.to_thread(stop)
         return {"ok": True}
@@ -341,10 +354,10 @@ async def despertador(req: DespertadorRequest):
 
     prompt = f"""Es la mañana temprano. Armá la playlist del despertador.
 
-Álbumes con aniversario esta semana:
-{contexto}
+    Álbumes con aniversario esta semana:
+    {contexto}
 
-Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exactas de fecha. Arrancá con temas de ese disco y expandí hacia la escena y el momento en que salió. La narración tiene que contar por qué hoy es ese disco: qué pasaba alrededor, quién estaba en esa banda. Empezá suave, es temprano."""
+    Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exactas de fecha. Arrancá con temas de ese disco y expandí hacia la escena y el momento en que salió. La narración tiene que contar por qué hoy es ese disco: qué pasaba alrededor, quién estaba en esa banda. Empezá suave, es temprano."""
 
     try:
         data = await curate(prompt, req.n_tracks)
@@ -359,6 +372,7 @@ Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exact
     playlist_id = uuid.uuid4()
 
     _cancel_fade()
+    _cancel_resto()  
     try:
         await asyncio.to_thread(_start_playback, tracks, req.fade)
     except MPVError as e:
