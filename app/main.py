@@ -7,7 +7,7 @@ import time
 from app.history import register_advance, set_current
 from app.db import execute as db_execute, fetch as db_fetch
 from app.curator import curate
-from app.history import get_current, register_advance, set_current
+from app.history import get_current, register_advance, set_current, get_track_at
 from contextlib import asynccontextmanager
 from app.db import init_pool, close_pool
 
@@ -294,12 +294,28 @@ async def ctl_volume(req: VolumeRequest):
         raise HTTPException(503, str(e))
 
 
+
+
 @app.get("/status", dependencies=[Depends(verify_api_key)])
 async def status():
     try:
-        return await asyncio.to_thread(get_status)
+        st = await asyncio.to_thread(get_status)
     except MPVError as e:
         raise HTTPException(503, str(e))
+
+    t = get_track_at(st.get("playlist_pos"))
+    if t:
+        st["artist"] = t["artist"]
+        st["track"] = t["title"]
+        st["now_playing"] = f"{t['artist']} - {t['title']}"
+        st["rationale"] = t.get("rationale")
+    else:
+        # Sin playlist en memoria (reinicio del servicio, playlist vieja)
+        st["artist"] = None
+        st["track"] = st.get("title")
+        st["now_playing"] = st.get("title") or "—"
+
+    return st
 
 
 @app.post("/play_video", dependencies=[Depends(verify_api_key)])

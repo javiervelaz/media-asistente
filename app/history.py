@@ -56,3 +56,10 @@ async def register_advance(motivo: str = "next") -> None:
 
 def get_current() -> dict:
     return _current
+
+def get_track_at(pos: int | None) -> dict | None:
+    """Track de la playlist en curso según la posición de mpv."""
+    if pos is None or pos < 0:
+        return None
+    tracks = _current.get("tracks") or []
+    return tracks[pos] if pos < len(tracks) else None
