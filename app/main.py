@@ -284,12 +284,29 @@ async def ctl_stop():
         raise HTTPException(503, str(e))
 
 
+class VolumeRequest(BaseModel):
+    level: int | None = None    # absoluto
+    delta: int | None = None    # relativo: +10 / -10
+
+
 @app.post("/control/volume", dependencies=[Depends(verify_api_key)])
-async def ctl_volume(req: VolumeRequest):
-    _cancel_fade()                   # si el usuario toca volumen, el fade cede
+async def ctl_volume(req: VolumeRequest | None = None):
+    _cancel_fade()
+
+    if req is None or (req.level is None and req.delta is None):
+        raise HTTPException(400, "mandá 'level' (absoluto) o 'delta' (relativo)")
+
     try:
-        await asyncio.to_thread(set_volume, req.level)
-        return {"ok": True, "level": req.level}
+        if req.delta is not None:
+            st = await asyncio.to_thread(get_status)
+            actual = int(st.get("volume") or 0)
+            nuevo = actual + req.delta
+        else:
+            nuevo = req.level
+
+        nuevo = max(0, min(100, nuevo))
+        await asyncio.to_thread(set_volume, nuevo)
+        return {"ok": True, "level": nuevo}
     except MPVError as e:
         raise HTTPException(503, str(e))
 
