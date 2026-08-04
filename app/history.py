@@ -53,6 +53,6 @@ async def register_advance(motivo: str = "next") -> None:
     except Exception:
         logger.exception("no pude registrar el feedback")
 
-# app/history.py
+
 def get_current() -> dict:
     return _current

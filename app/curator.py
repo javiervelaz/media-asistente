@@ -146,6 +146,9 @@ Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
      "rationale": "una frase: por qué está y por qué en esta posición"}
   ]
 }
+Antes de cerrar, pasá get_recordings por los 2 o 3 álbumes que más peso tienen
+en la playlist y usá esos recording_mbid y length_ms. Con eso la búsqueda en
+YouTube deja de traer covers y versiones en vivo.
 Incluí recording_mbid y length_ms solo si los sacaste de get_recordings. Si no, dejalos en null.
 Mantené cada rationale en una sola frase corta: la respuesta tiene que entrar completa."""
 

@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Media Asistente", version="0.2.0", lifespan=lifespan)
 
-ARRANQUE = 3   # tracks a resolver antes de devolver respuesta
+ARRANQUE = 5   # tracks a resolver antes de devolver respuesta
 
 # === Modelos ===
 
@@ -193,8 +193,9 @@ async def create_playlist(req: PlaylistRequest):
             _start_fade(req.fade_target, req.fade_seconds)
 
         set_current(playlist_id, cabeza)
-        asyncio.create_task(_log_history(cabeza, req.room_id, playlist_id))
-        asyncio.create_task(
+        _fire(_log_history(cabeza, req.room_id, playlist_id))
+        global _resto_task
+        _resto_task = asyncio.create_task(
             _resolver_resto(propuestos[ARRANQUE:], playlist_id, req.room_id))
 
     t_play = time.monotonic()
@@ -208,7 +209,8 @@ async def create_playlist(req: PlaylistRequest):
         "queued": len(cabeza),
         "pending": max(0, len(propuestos) - ARRANQUE),
         "first_track": cabeza[0],
-        "tracks": cabeza,
+        "tracks": cabeza,                    # resueltos, listos para reproducir
+        "proposed": propuestos,              # ← la playlist completa del curador
         "faded": req.fade and req.play_now,
         "playlist_id": str(playlist_id),
     }
@@ -381,7 +383,7 @@ async def despertador(req: DespertadorRequest):
     if req.fade:
         _start_fade(req.fade_target, req.fade_seconds)
 
-    asyncio.create_task(_log_history(tracks, req.room_id, playlist_id))
+    _fire(_log_history(tracks, req.room_id, playlist_id))
     set_current(playlist_id, tracks)
 
     return {
@@ -410,3 +412,13 @@ async def _resolver_resto(pendientes: list, playlist_id, room_id: str) -> None:
         await _log_history(resto, room_id, playlist_id)
     except Exception:
         logger.exception("falló la resolución en background")
+
+_bg_tasks: set = set()
+
+
+def _fire(coro) -> "asyncio.Task":
+    """Lanza una task manteniendo referencia fuerte hasta que termina."""
+    t = asyncio.create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+    return t
