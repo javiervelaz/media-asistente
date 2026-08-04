@@ -52,3 +52,7 @@ async def register_advance(motivo: str = "next") -> None:
             logger.info("skip: %s - %s (%.0fs)", t["artist"], t["title"], elapsed)
     except Exception:
         logger.exception("no pude registrar el feedback")
+
+# app/history.py
+def get_current() -> dict:
+    return _current

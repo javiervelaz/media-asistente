@@ -2,10 +2,12 @@
 import asyncio
 import logging
 import uuid
+import time
+
 from app.history import register_advance, set_current
 from app.db import execute as db_execute, fetch as db_fetch
 from app.curator import curate
-
+from app.history import get_current, register_advance, set_current
 from contextlib import asynccontextmanager
 from app.db import init_pool, close_pool
 
@@ -46,6 +48,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Media Asistente", version="0.2.0", lifespan=lifespan)
 
+ARRANQUE = 3   # tracks a resolver antes de devolver respuesta
 
 # === Modelos ===
 
@@ -135,10 +138,10 @@ async def health():
 @app.post("/playlist", dependencies=[Depends(verify_api_key)])
 async def create_playlist(req: PlaylistRequest):
     """Genera una playlist con IA y la reproduce (solo audio)"""
+    t0 = time.monotonic()
 
     usar_curador = (settings.curator_enabled
                     if req.use_curator is None else req.use_curator)
-
     concept = narration = ""
 
     if usar_curador:
@@ -156,32 +159,44 @@ async def create_playlist(req: PlaylistRequest):
             logger.exception("LLM error")
             raise HTTPException(500, f"LLM error: {e}")
 
-    tracks = await resolve_tracks(data["tracks"])
-    if not tracks:
+    t_cur = time.monotonic()
+
+    # Resolvemos solo la cabeza: el resto se encola en background
+    propuestos = data["tracks"]
+    cabeza = await resolve_tracks(propuestos[:ARRANQUE])
+    if not cabeza:
         raise HTTPException(404, "No track could be resolved on YouTube")
 
+    t_res = time.monotonic()
     playlist_id = uuid.uuid4()
 
     if req.play_now:
         _cancel_fade()
         try:
-            await asyncio.to_thread(_start_playback, tracks, req.fade)
+            await asyncio.to_thread(_start_playback, cabeza, req.fade)
         except MPVError as e:
             raise HTTPException(503, f"Player not available: {e}")
 
         if req.fade:
             _start_fade(req.fade_target, req.fade_seconds)
 
-        asyncio.create_task(_log_history(tracks, req.room_id, playlist_id))
-        set_current(playlist_id, tracks)        # ← nueva línea
+        set_current(playlist_id, cabeza)
+        asyncio.create_task(_log_history(cabeza, req.room_id, playlist_id))
+        asyncio.create_task(
+            _resolver_resto(propuestos[ARRANQUE:], playlist_id, req.room_id))
+
+    t_play = time.monotonic()
+    logger.info("timing — curador:%.1fs resolver:%.1fs playback:%.1fs total:%.1fs",
+                t_cur - t0, t_res - t_cur, t_play - t_res, t_play - t0)
 
     return {
         "title": data.get("title"),
         "concept": concept,
         "narration": narration,
-        "queued": len(tracks),
-        "first_track": tracks[0],
-        "tracks": tracks,
+        "queued": len(cabeza),
+        "pending": max(0, len(propuestos) - ARRANQUE),
+        "first_track": cabeza[0],
+        "tracks": cabeza,
         "faded": req.fade and req.play_now,
         "playlist_id": str(playlist_id),
     }
@@ -364,3 +379,20 @@ Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exact
         "faded": req.fade,
         "playlist_id": str(playlist_id),
     }
+
+
+
+
+async def _resolver_resto(pendientes: list, playlist_id, room_id: str) -> None:
+    """Resuelve y encola el resto mientras ya está sonando."""
+    try:
+        resto = await resolve_tracks(pendientes)
+        for t in resto:
+            await asyncio.to_thread(enqueue_url, t["url"])
+        logger.info("encolados %d tracks adicionales", len(resto))
+
+        actuales = _current.get("tracks", [])
+        set_current(playlist_id, actuales + resto)
+        await _log_history(resto, room_id, playlist_id)
+    except Exception:
+        logger.exception("falló la resolución en background")
