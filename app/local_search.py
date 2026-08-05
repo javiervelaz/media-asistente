@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 MIN_TRACKS_HEAD = 5      # mínimo para arrancar sin esperar al curador
 MIN_TRACKS_FULL = 15     # mínimo para saltear el curador por completo
 SIM_THRESHOLD = 0.35     # umbral de similitud trigram contra artists.name
-MAX_POR_ARTISTA = 3      # evita que un solo match devuelva 20 temas iguales
+MAX_POR_ARTISTA = 5      # evita que un solo match devuelva 20 temas iguales
 
 
 SQL = """
