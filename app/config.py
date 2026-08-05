@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     database_url: str
     curator_model: str = "claude-sonnet-4-6"
     curator_enabled: bool = True
+    local_search_enabled: bool = False
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com.com )"
 
 
