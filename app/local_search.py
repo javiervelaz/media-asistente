@@ -40,11 +40,8 @@ universo AS (
     GROUP BY mbid
 ),
 peso AS (
-    -- Agregado: un artista con N discos en ephemerides no debe multiplicar filas.
-    -- weight 1 = colección de vinilos, 2 = canon, 3 = descubierto por uso.
-    SELECT lower(artist) AS nombre, min(weight) AS weight
-    FROM ephemerides
-    GROUP BY 1
+    SELECT mbid::uuid AS release_mbid, min(weight) AS weight
+    FROM ephemerides WHERE mbid IS NOT NULL GROUP BY 1
 ),
 senal AS (
     SELECT recording_mbid,
@@ -66,14 +63,15 @@ candidatos AS (
         r.length_ms AS length_ms,
         (tr.recording_mbid IS NOT NULL) AS cached,
         ( 3.0 * u.afinidad * u.sim
-        + 1.0 * COALESCE(4 - e.weight, 0)
+        + 2.5 * COALESCE(4 - e.weight, 0)
+        + 1.2 * (r.position IS NOT NULL AND r.position <= 5)::int
         + 1.5 * (tr.recording_mbid IS NOT NULL)::int
         + 0.8 * LEAST(COALESCE(s.completos, 0), 3)
         + 0.3 * LEAST(COALESCE(tr.play_count, 0), 5)
         - 2.0 * COALESCE(s.skips, 0)
         - 1.5 * (COALESCE(s.ultimo, '1970-01-01'::timestamptz)
                  > now() - interval '14 days')::int
-        + random() * 0.6
+        + random() * 0.4
         ) AS score
     FROM universo u
     JOIN artists    a  ON a.mbid = u.mbid
@@ -81,7 +79,7 @@ candidatos AS (
     JOIN recordings r  ON r.release_mbid = rl.mbid
     LEFT JOIN senal s  ON s.recording_mbid = r.mbid
     LEFT JOIN track_resolutions tr ON tr.recording_mbid = r.mbid
-    LEFT JOIN peso  e  ON e.nombre = lower(a.name)
+    LEFT JOIN peso e ON e.release_mbid = rl.mbid
     WHERE COALESCE(s.skips, 0) < 2
       AND COALESCE(tr.fail_count, 0) < 2
       AND (r.length_ms IS NULL OR r.length_ms BETWEEN 60000 AND 900000)
