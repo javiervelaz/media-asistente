@@ -20,7 +20,7 @@ WITH semilla AS (
     -- Artistas que matchean el prompt por trigram
     SELECT mbid, similarity(name, $1) AS sim
     FROM artists
-    WHERE name %% $1 AND similarity(name, $1) >= $2
+    WHERE name % $1 AND similarity(name, $1) >= $2
     ORDER BY sim DESC
     LIMIT 5
 ),
