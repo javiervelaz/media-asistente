@@ -491,62 +491,82 @@ async def search_in_history(req: PromptRequest, play: bool = False,
 # === Despertador ===
 
 CONTEXT_SQL = """
-SELECT a.name AS artist, r.title, r.first_release_date::text AS fecha,
-       EXTRACT(YEAR FROM r.first_release_date)::int AS anio,
-       (EXTRACT(YEAR FROM CURRENT_DATE)
-        - EXTRACT(YEAR FROM r.first_release_date))::int AS aniversario,
-       CASE WHEN to_char(r.first_release_date,'MM-DD') = to_char(CURRENT_DATE,'MM-DD')
-            THEN 'exacto' ELSE 'cercano' END AS match_type,
-       COALESCE(e.weight, 9) AS weight
-FROM releases r
-JOIN artists a ON a.mbid = r.artist_mbid
-LEFT JOIN ephemerides e ON e.mbid = r.mbid::text
-WHERE r.primary_type = 'Album'
-  AND NOT ('Compilation' = ANY(r.secondary_types))
-  AND ABS(((EXTRACT(DOY FROM r.first_release_date)
-          - EXTRACT(DOY FROM CURRENT_DATE) + 183)::int % 365) - 183) <= 7
-ORDER BY (to_char(r.first_release_date,'MM-DD') = to_char(CURRENT_DATE,'MM-DD')) DESC,
-         ((EXTRACT(YEAR FROM CURRENT_DATE)
-           - EXTRACT(YEAR FROM r.first_release_date))::int % 10 = 0) DESC,
-         COALESCE(e.weight, 9),
-         r.first_release_date
-LIMIT 25;
+WITH discos AS (
+    SELECT r.mbid AS release_mbid, a.name AS artist, r.title AS album,
+           EXTRACT(YEAR FROM r.first_release_date)::int AS anio,
+           (EXTRACT(YEAR FROM CURRENT_DATE)
+            - EXTRACT(YEAR FROM r.first_release_date))::int AS aniversario,
+           row_number() OVER (
+               ORDER BY (to_char(r.first_release_date,'MM-DD')
+                         = to_char(CURRENT_DATE,'MM-DD')) DESC,
+                        ((EXTRACT(YEAR FROM CURRENT_DATE)
+                          - EXTRACT(YEAR FROM r.first_release_date))::int % 10 = 0) DESC,
+                        COALESCE(e.weight, 9),
+                        random()
+           ) AS rank_disco
+    FROM releases r
+    JOIN artists a ON a.mbid = r.artist_mbid
+    LEFT JOIN ephemerides e ON e.mbid = r.mbid::text
+    WHERE r.primary_type = 'Album'
+      AND NOT ('Compilation' = ANY(r.secondary_types))
+      AND ABS(((EXTRACT(DOY FROM r.first_release_date)
+              - EXTRACT(DOY FROM CURRENT_DATE) + 183)::int % 365) - 183) <= 7
+      AND EXISTS (SELECT 1 FROM recordings rc WHERE rc.release_mbid = r.mbid)
+),
+elegidos AS (
+    SELECT * FROM discos WHERE rank_disco <= 5
+),
+tracks AS (
+    SELECT d.artist, d.album, d.anio, d.aniversario, d.rank_disco,
+           rc.mbid::text AS recording_mbid, rc.title, rc.length_ms,
+           row_number() OVER (
+               PARTITION BY d.release_mbid ORDER BY rc.position NULLS LAST
+           ) AS n_en_disco
+    FROM elegidos d
+    JOIN recordings rc ON rc.release_mbid = d.release_mbid
+    LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+    WHERE COALESCE(tr.fail_count, 0) < 2
+      AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+)
+SELECT artist, album, anio, aniversario, recording_mbid, title, length_ms
+FROM tracks
+ORDER BY n_en_disco, rank_disco
+LIMIT $1
 """
 
 
 @app.post("/despertador", dependencies=[Depends(verify_api_key)])
 async def despertador(req: DespertadorRequest):
-    """Playlist de la mañana, anclada en aniversarios de esta semana."""
-    filas = await db_fetch(CONTEXT_SQL)
+    """Playlist de la mañana desde el grafo local. Cero tokens."""
+    filas = await db_fetch(DESPERTADOR_SQL, req.n_tracks)
     if not filas:
-        raise HTTPException(404, "sin efemérides en la ventana")
+        raise HTTPException(404, "sin álbumes con aniversario y tracklist cargado")
 
-    contexto = "\n".join(
-        f"- {r['artist']} — {r['title']} ({r['fecha']}), "
-        f"{r['aniversario']} años, coincidencia {r['match_type']}"
-        for r in filas
-    )
+    # Un renglón por disco, en el orden en que aparecen
+    discos = {}
+    for r in filas:
+        discos.setdefault(
+            (r["artist"], r["album"]),
+            f"{r['artist']} — {r['album']} ({r['anio']}, {r['aniversario']} años)")
 
-    prompt = f"""Es la mañana temprano. Armá la playlist del despertador.
+    concepto = " · ".join(discos.values())
+    titulo = f"Efemérides: {len(discos)} discos"
 
-    Álbumes con aniversario esta semana:
-    {contexto}
-
-    Elegí UN álbum como eje. Priorizá aniversarios redondos y coincidencias exactas de fecha. Arrancá con temas de ese disco y expandí hacia la escena y el momento en que salió. La narración tiene que contar por qué hoy es ese disco: qué pasaba alrededor, quién estaba en esa banda. Empezá suave, es temprano."""
-
-    try:
-        data = await curate(prompt, req.n_tracks)
-    except Exception as e:
-        logger.exception("curador falló en el despertador")
-        raise HTTPException(502, f"curador: {e}")
+    tracks = [{
+        "artist": r["artist"],
+        "title": r["title"],
+        "recording_mbid": r["recording_mbid"],
+        "length_ms": r["length_ms"],
+        "rationale": f"{r['album']} ({r['anio']}) — {r['aniversario']} años hoy",
+    } for r in filas]
 
     resp = await _lanzar(
-        data["tracks"], data.get("title") or "Despertador", req.room_id,
-        source="curator", prompt="despertador", fade=req.fade,
-        fade_target=req.fade_target, fade_seconds=req.fade_seconds,
+        tracks, titulo, req.room_id, source="local", prompt="despertador",
+        fade=req.fade, fade_target=req.fade_target,
+        fade_seconds=req.fade_seconds,
     )
-    resp["concept"] = data.get("concept", "")
-    resp["narration"] = data.get("narration", "")
+    resp["concept"] = concepto
+    resp["narration"] = ""
     return resp
 
 
