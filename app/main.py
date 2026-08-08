@@ -505,8 +505,9 @@ WHERE r.primary_type = 'Album'
   AND NOT ('Compilation' = ANY(r.secondary_types))
   AND ABS(((EXTRACT(DOY FROM r.first_release_date)
           - EXTRACT(DOY FROM CURRENT_DATE) + 183)::int % 365) - 183) <= 7
-ORDER BY (match_type = 'exacto') DESC,
-         (aniversario % 10 = 0) DESC,
+ORDER BY (to_char(r.first_release_date,'MM-DD') = to_char(CURRENT_DATE,'MM-DD')) DESC,
+         ((EXTRACT(YEAR FROM CURRENT_DATE)
+           - EXTRACT(YEAR FROM r.first_release_date))::int % 10 = 0) DESC,
          COALESCE(e.weight, 9),
          r.first_release_date
 LIMIT 25;
