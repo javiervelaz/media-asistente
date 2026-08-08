@@ -490,7 +490,7 @@ async def search_in_history(req: PromptRequest, play: bool = False,
 
 # === Despertador ===
 
-CONTEXT_SQL = """
+DESPERTADOR_SQL = """
 WITH discos AS (
     SELECT r.mbid AS release_mbid, a.name AS artist, r.title AS album,
            EXTRACT(YEAR FROM r.first_release_date)::int AS anio,
