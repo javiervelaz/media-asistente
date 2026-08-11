@@ -62,6 +62,7 @@ candidatos AS (
         r.title     AS title,
         r.length_ms AS length_ms,
         (tr.recording_mbid IS NOT NULL) AS cached,
+        u.afinidad AS afinidad,
         ( 3.0 * u.afinidad * u.sim
         + 2.5 * COALESCE(4 - e.weight, 0)
         + 1.2 * (r.position IS NOT NULL AND r.position <= 5)::int
