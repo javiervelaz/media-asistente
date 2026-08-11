@@ -10,7 +10,7 @@ from app.db import fetch
 logger = logging.getLogger(__name__)
 
 MIN_TRACKS_HEAD = 5      # mínimo para arrancar sin esperar al curador
-MIN_TRACKS_FULL = 10    # mínimo para saltear el curador por completo
+MIN_TRACKS_FULL = 8    # mínimo para saltear el curador por completo
 SIM_THRESHOLD = 0.7    # umbral de similitud trigram contra artists.name
 MAX_POR_ARTISTA = 5      # evita que un solo match devuelva 20 temas iguales
 
