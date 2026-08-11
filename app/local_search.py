@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 MIN_TRACKS_HEAD = 5      # mínimo para arrancar sin esperar al curador
 MIN_TRACKS_FULL = 8    # mínimo para saltear el curador por completo
-SIM_THRESHOLD = 0.7    # umbral de similitud trigram contra artists.name
+SIM_THRESHOLD = 0.5    # umbral de similitud trigram contra artists.name
 MAX_POR_ARTISTA = 7      # evita que un solo match devuelva 20 temas iguales
 
 
@@ -65,7 +65,7 @@ candidatos AS (
         u.afinidad AS afinidad,
         u.sim AS sim,
         ( 3.0 * u.afinidad * u.sim
-        + 2.5 * COALESCE(4 - e.weight, 0)
+        + 1.5 * COALESCE(4 - e.weight, 0)
         + 1.2 * (r.position IS NOT NULL AND r.position <= 5)::int
         + 1.5 * (tr.recording_mbid IS NOT NULL)::int
         + 0.8 * LEAST(COALESCE(s.completos, 0), 3)
@@ -99,7 +99,7 @@ topeado AS (
 )
 SELECT recording_mbid, artist_mbid, artist, title, length_ms, cached
 FROM topeado
-WHERE rn <= CASE WHEN afinidad >= 1.0 AND sim >= 0.8 THEN $3
+WHERE rn <= CASE WHEN afinidad >= 1.0 AND sim >= 0.6 THEN $3
                  WHEN afinidad >= 1.0 THEN 2
                  ELSE 2 END
 ORDER BY score DESC
