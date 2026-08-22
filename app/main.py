@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app import local_search
+from app import local_search, player, tracks
 from app.auth import verify_api_key
 from app.config import settings
 from app.curator import curate
@@ -27,21 +27,8 @@ from app.history import (
     set_current,
 )
 from app.llm import generate_playlist
-from app.music import resolve_tracks
-from app.player import (
-    MPVError,
-    clear_playlist,
-    enqueue_url,
-    get_status,
-    next_track,
-    pause,
-    play_url,
-    prev_track,
-    resume,
-    set_video,
-    set_volume,
-    stop,
-)
+from app.music import mark_failed, resolve_tracks
+from app.player import MPVError
 
 logging.basicConfig(
     level=settings.log_level,
@@ -53,13 +40,14 @@ logger = logging.getLogger("media-asistente")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_pool()
+    player.iniciar_observador(on_fail=mark_failed)
     yield
     await close_pool()
 
 
-app = FastAPI(title="Media Asistente", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Media Asistente", version="0.4.0", lifespan=lifespan)
 
-ARRANQUE = 5   # tracks a resolver antes de devolver respuesta
+ARRANQUE = 1   # tracks a resolver antes de devolver respuesta
 
 
 # === Modelos ===
@@ -143,7 +131,7 @@ async def _fade_in(target: int, seconds: int = 30, steps: int = 30):
     try:
         for i in range(1, steps + 1):
             level = round(target * i / steps)
-            await asyncio.to_thread(set_volume, level)
+            await player.set_volume(level)
             await asyncio.sleep(seconds / steps)
         logger.info("fade-in completo a volumen %d", target)
     except asyncio.CancelledError:
@@ -153,15 +141,55 @@ async def _fade_in(target: int, seconds: int = 30, steps: int = 30):
         logger.exception("fade-in abortado por error en set_volume")
 
 
-def _start_playback(tracks: list, fade: bool) -> None:
-    """Secuencia de carga (sincrónica). Se invoca vía asyncio.to_thread."""
-    clear_playlist()
-    set_video(False)                 # música = sin video
+# === Descarga + encolado ===
+
+async def _bajar(t: dict) -> "str | None":
+    """Baja el archivo y lo registra para el observador. None si falla."""
+    yid = t.get("youtube_id")
+    if not yid:
+        logger.error("track sin youtube_id: %s - %s", t.get("artist"), t.get("title"))
+        return None
+    try:
+        path = await tracks.obtener_track(yid)
+    except tracks.TrackNoDisponible as e:
+        logger.error("no se pudo bajar %s - %s: %s", t["artist"], t["title"], e)
+        await mark_failed(yid, str(e))
+        return None
+    player.registrar_track(path, yid)
+    return str(path)
+
+
+async def _encolar(t: dict) -> bool:
+    path = await _bajar(t)
+    if not path:
+        return False
+    await player.enqueue_path(path)
+    return True
+
+
+async def _start_playback(cabeza: list, fade: bool) -> list:
+    """Baja el primero, arranca, y encola el resto de la cabeza.
+    Devuelve los tracks que realmente entraron a la cola."""
+    primero = None
+    idx = 0
+    for idx, t in enumerate(cabeza):
+        primero = await _bajar(t)
+        if primero:
+            break
+    if not primero:
+        raise HTTPException(404, "ningún track de la cabeza se pudo descargar")
+
+    await player.clear_playlist()
+    await player.set_video(False)          # música = sin video
     if fade:
-        set_volume(0)                # silencio antes de soltar el primer track
-    play_url(tracks[0]["url"], replace=True)
-    for t in tracks[1:]:
-        enqueue_url(t["url"])
+        await player.set_volume(0)         # silencio antes del primer track
+    await player.play_path(primero, replace=True)
+
+    encolados = [cabeza[idx]]
+    for t in cabeza[idx + 1:]:
+        if await _encolar(t):
+            encolados.append(t)
+    return encolados
 
 
 # === Persistencia del historial ===
@@ -174,12 +202,6 @@ def _uuid_o_none(v) -> uuid.UUID | None:
         return uuid.UUID(str(v))
     except (ValueError, AttributeError, TypeError):
         return None
-
-
-def _video_id(url: str | None) -> str | None:
-    if not url or "v=" not in url:
-        return None
-    return url.rsplit("v=", 1)[-1] or None
 
 
 # artist_mbid se deriva del recording: el curador no lo devuelve y no
@@ -197,12 +219,12 @@ SELECT $1, $2, $3, $4, $5, $6,
 """
 
 
-async def _log_history(tracks: list, room_id: str, playlist_id,
+async def _log_history(tracks_: list, room_id: str, playlist_id,
                        offset: int = 0) -> None:
-    """Registra tracks YA RESUELTOS. `position` tiene que coincidir con
-    el índice de mpv: por eso el offset cuando llega la cola en background."""
+    """Registra tracks YA RESUELTOS Y ENCOLADOS. `position` tiene que coincidir
+    con el índice de mpv: por eso el offset cuando llega la cola en background."""
     try:
-        for i, t in enumerate(tracks, start=offset):
+        for i, t in enumerate(tracks_, start=offset):
             await db_execute(
                 INSERT_HISTORY,
                 playlist_id,
@@ -211,7 +233,7 @@ async def _log_history(tracks: list, room_id: str, playlist_id,
                 t["title"],
                 t.get("rationale"),
                 _uuid_o_none(t.get("recording_mbid")),
-                _video_id(t.get("url")),
+                t.get("youtube_id"),
                 room_id,
             )
     except Exception:
@@ -220,17 +242,20 @@ async def _log_history(tracks: list, room_id: str, playlist_id,
 
 async def _resolver_resto(pendientes: list, playlist_id, room_id: str,
                           offset: int) -> None:
-    """Resuelve y encola el resto mientras ya está sonando."""
+    """Resuelve, baja y encola el resto mientras ya está sonando."""
     if not pendientes:
         return
     try:
         resto = await resolve_tracks(pendientes)
+        encolados = []
         for t in resto:
-            await asyncio.to_thread(enqueue_url, t["url"])
-        logger.info("encolados %d tracks adicionales", len(resto))
+            if await _encolar(t):
+                encolados.append(t)
+        logger.info("encolados %d/%d tracks adicionales", len(encolados), len(resto))
 
-        append_current(resto)
-        await _log_history(resto, room_id, playlist_id, offset=offset)
+        if encolados:
+            append_current(encolados)
+            await _log_history(encolados, room_id, playlist_id, offset=offset)
     except asyncio.CancelledError:
         logger.info("resolución en background cancelada")
         raise
@@ -269,32 +294,33 @@ async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
     if not cabeza:
         raise HTTPException(404, "No track could be resolved on YouTube")
 
+    encolados = cabeza
     if play_now:
         _cancel_fade()
         _cancel_resto()
         try:
-            await asyncio.to_thread(_start_playback, cabeza, fade)
+            encolados = await _start_playback(cabeza, fade)
         except MPVError as e:
             raise HTTPException(503, f"Player not available: {e}")
 
         if fade:
             _start_fade(fade_target, fade_seconds)
 
-        set_current(playlist_id, cabeza)
-        _fire(_log_history(cabeza, room_id, playlist_id, offset=0))
+        set_current(playlist_id, encolados)
+        _fire(_log_history(encolados, room_id, playlist_id, offset=0))
         _resto_task = _fire(
             _resolver_resto(propuestos[ARRANQUE:], playlist_id,
-                            room_id, offset=len(cabeza))
+                            room_id, offset=len(encolados))
         )
 
     return {
         "playlist_id": str(playlist_id),
         "title": titulo,
         "source": source,
-        "queued": len(cabeza),
+        "queued": len(encolados),
         "pending": max(0, len(propuestos) - ARRANQUE),
-        "first_track": cabeza[0],
-        "tracks": cabeza,
+        "first_track": encolados[0],
+        "tracks": encolados,
         "proposed": propuestos,
         "faded": fade and play_now,
     }
@@ -304,7 +330,8 @@ async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    """Incluye el estado del POT provider: sin él, las descargas fallan."""
+    return {"status": "ok", "pot_provider": await tracks.pot_ok()}
 
 
 # === Playlists ===
@@ -401,12 +428,15 @@ async def _completar_con_curador(playlist_id: uuid.UUID, prompt: str,
         )
         data = await curate(prompt_ext, max(1, n_tracks - len(ya_locales)))
         resto = await resolve_tracks(data["tracks"])
+        encolados = []
         for t in resto:
-            await asyncio.to_thread(enqueue_url, t["url"])
+            if await _encolar(t):
+                encolados.append(t)
 
-        append_current(resto)
-        await _log_history(resto, room_id, playlist_id, offset=offset)
-        logger.info("hybrid: el curador sumó %d tracks", len(resto))
+        if encolados:
+            append_current(encolados)
+            await _log_history(encolados, room_id, playlist_id, offset=offset)
+        logger.info("hybrid: el curador sumó %d tracks", len(encolados))
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -449,7 +479,7 @@ async def replay(playlist_id: uuid.UUID, sin_skips: bool = True,
     orig = await db_fetchrow(
         "SELECT title, room_id FROM playlists WHERE id = $1", playlist_id)
 
-    tracks = [{
+    lista = [{
         "artist": r["artist"],
         "title": r["title"],
         "rationale": r["rationale"],
@@ -457,12 +487,12 @@ async def replay(playlist_id: uuid.UUID, sin_skips: bool = True,
     } for r in rows]
 
     if shuffle:
-        random.shuffle(tracks)
+        random.shuffle(lista)
 
     titulo = f"{orig['title'] if orig else 'Playlist'} (repetida)"
     room_id = (orig["room_id"] if orig and orig["room_id"] else "main")
 
-    return await _lanzar(tracks, titulo, room_id, source="replay",
+    return await _lanzar(lista, titulo, room_id, source="replay",
                          fade=fade, fade_target=fade_target,
                          fade_seconds=fade_seconds)
 
@@ -471,20 +501,20 @@ async def replay(playlist_id: uuid.UUID, sin_skips: bool = True,
 async def search_in_history(req: PromptRequest, play: bool = False,
                             limite: int = 20):
     """Endpoint de medición del grafo local. Con play=false no reproduce."""
-    tracks = await local_search.buscar(req.prompt, limite=limite)
-    via = local_search.clasificar(tracks)
+    encontrados = await local_search.buscar(req.prompt, limite=limite)
+    via = local_search.clasificar(encontrados)
 
     logger.info("searchInHistory prompt=%r via=%s n=%d cached=%d",
-                req.prompt, via, len(tracks),
-                sum(1 for t in tracks if t["cached"]))
+                req.prompt, via, len(encontrados),
+                sum(1 for t in encontrados if t["cached"]))
 
     if not play:
-        return {"via": via, "count": len(tracks), "tracks": tracks}
+        return {"via": via, "count": len(encontrados), "tracks": encontrados}
 
     if via == "curator":
         raise HTTPException(422, "sin señal local suficiente")
 
-    return await _lanzar(tracks, f"Historial: {req.prompt}",
+    return await _lanzar(encontrados, f"Historial: {req.prompt}",
                          source=via, prompt=req.prompt)
 
 
@@ -552,7 +582,7 @@ async def despertador(req: DespertadorRequest):
     concepto = " · ".join(discos.values())
     titulo = f"Efemérides: {len(discos)} discos"
 
-    tracks = [{
+    lista = [{
         "artist": r["artist"],
         "title": r["title"],
         "recording_mbid": r["recording_mbid"],
@@ -561,7 +591,7 @@ async def despertador(req: DespertadorRequest):
     } for r in filas]
 
     resp = await _lanzar(
-        tracks, titulo, req.room_id, source="local", prompt="despertador",
+        lista, titulo, req.room_id, source="local", prompt="despertador",
         fade=req.fade, fade_target=req.fade_target,
         fade_seconds=req.fade_seconds,
     )
@@ -575,7 +605,7 @@ async def despertador(req: DespertadorRequest):
 @app.post("/control/play", dependencies=[Depends(verify_api_key)])
 async def ctl_play():
     try:
-        await asyncio.to_thread(resume)
+        await player.resume()
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -585,7 +615,7 @@ async def ctl_play():
 async def ctl_pause():
     _cancel_fade()
     try:
-        await asyncio.to_thread(pause)
+        await player.pause()
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -596,7 +626,7 @@ async def ctl_next():
     _cancel_fade()
     await register_advance("next")          # antes de saltar
     try:
-        await asyncio.to_thread(next_track)
+        await player.next_track()
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -607,7 +637,7 @@ async def ctl_prev():
     _cancel_fade()
     await register_advance("prev")          # volver atrás no es skip
     try:
-        await asyncio.to_thread(prev_track)
+        await player.prev_track()
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -618,7 +648,7 @@ async def ctl_stop():
     _cancel_fade()
     _cancel_resto()
     try:
-        await asyncio.to_thread(stop)
+        await player.stop()
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -633,14 +663,14 @@ async def ctl_volume(req: VolumeRequest | None = None):
 
     try:
         if req.delta is not None:
-            st = await asyncio.to_thread(get_status)
+            st = await player.get_status()
             actual = int(st.get("volume") or 0)
             nuevo = actual + req.delta
         else:
             nuevo = req.level
 
         nuevo = max(0, min(100, nuevo))
-        await asyncio.to_thread(set_volume, nuevo)
+        await player.set_volume(nuevo)
         return {"ok": True, "level": nuevo}
     except MPVError as e:
         raise HTTPException(503, str(e))
@@ -648,10 +678,9 @@ async def ctl_volume(req: VolumeRequest | None = None):
 
 @app.get("/status", dependencies=[Depends(verify_api_key)])
 async def status():
-    try:
-        st = await asyncio.to_thread(get_status)
-    except MPVError as e:
-        raise HTTPException(503, str(e))
+    st = await player.get_status()
+    if not st.get("mpv_ok"):
+        raise HTTPException(503, "mpv no responde")
 
     t = get_track_at(st.get("playlist_pos"))
     if t:
@@ -670,17 +699,27 @@ async def status():
 
 @app.post("/play_video", dependencies=[Depends(verify_api_key)])
 async def play_video(req: VideoRequest):
-    """Reproduce un video con audio + imagen en HDMI"""
+    """Reproduce un video con audio + imagen en HDMI.
+
+    mpv corre con --no-ytdl, así que el archivo se baja antes.
+    Tarda bastante más que antes: un video de 4 min son ~30-60s en el Pi 3B.
+    """
     _cancel_fade()
     _cancel_resto()
+
+    yid = tracks.extraer_id(req.url)
+    if not yid:
+        raise HTTPException(400, "no pude extraer el youtube_id de esa URL")
+
     try:
-        await asyncio.to_thread(_play_video_sync, req.url)
-        return {"ok": True, "playing": req.url}
+        path = await tracks.obtener_video(yid)
+    except tracks.TrackNoDisponible as e:
+        raise HTTPException(502, f"no se pudo bajar el video: {e}")
+
+    try:
+        await player.clear_playlist()
+        await player.set_video(True)
+        await player.play_path(path, replace=True)
+        return {"ok": True, "playing": req.url, "path": str(path)}
     except MPVError as e:
         raise HTTPException(503, str(e))
-
-
-def _play_video_sync(url: str) -> None:
-    clear_playlist()
-    set_video(True)
-    play_url(url, replace=True)

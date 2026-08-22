@@ -15,6 +15,8 @@ yt = YTMusic()   # sin auth: solo búsqueda pública
 RUIDO = ("live", "en vivo", "cover", "remix", "karaoke",
          "instrumental", "reaction", "tribute", "remaster")
 
+MAX_FAILS = 3
+
 
 def _hash(artist: str, title: str) -> str:
     key = f"{artist.strip().lower()}|{title.strip().lower()}"
@@ -22,6 +24,7 @@ def _hash(artist: str, title: str) -> str:
 
 
 def _url(video_id: str) -> str:
+    """Solo para mostrar/loguear. La reproducción va por tracks.obtener_track()."""
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
@@ -64,34 +67,43 @@ def _buscar_sync(artist: str, title: str) -> list:
     return res
 
 
+def _resultado(artist: str, title: str, yid: str, cached: bool) -> dict:
+    return {
+        "artist": artist,
+        "title": title,
+        "youtube_id": yid,
+        "url": _url(yid),      # derivado, no usar para reproducir
+        "cached": cached,
+    }
+
+
 async def resolve_track(artist: str, title: str,
                         recording_mbid: str | None = None,
                         expected_ms: int | None = None) -> dict | None:
-    """Devuelve {artist, title, url, cached} o None."""
+    """Devuelve {artist, title, youtube_id, url, cached} o None."""
 
     # 1) Cache por MBID
     if recording_mbid:
         row = await fetchrow(
             "SELECT youtube_id FROM track_resolutions "
-            "WHERE recording_mbid = $1 AND fail_count < 3", recording_mbid)
+            "WHERE recording_mbid = $1 AND fail_count < $2",
+            recording_mbid, MAX_FAILS)
         if row:
             await execute(
                 "UPDATE track_resolutions SET play_count = play_count + 1 "
                 "WHERE recording_mbid = $1", recording_mbid)
-            return {"artist": artist, "title": title,
-                    "url": _url(row["youtube_id"]), "cached": True}
+            return _resultado(artist, title, row["youtube_id"], True)
 
     # 2) Cache por texto
     qh = _hash(artist, title)
     row = await fetchrow(
         "SELECT youtube_id FROM text_resolutions "
-        "WHERE query_hash = $1 AND fail_count < 3", qh)
+        "WHERE query_hash = $1 AND fail_count < $2", qh, MAX_FAILS)
     if row:
         await execute(
             "UPDATE text_resolutions SET play_count = play_count + 1 "
             "WHERE query_hash = $1", qh)
-        return {"artist": artist, "title": title,
-                "url": _url(row["youtube_id"]), "cached": True}
+        return _resultado(artist, title, row["youtube_id"], True)
 
     # 3) Búsqueda real (bloqueante → fuera del event loop)
     resultados = await asyncio.to_thread(_buscar_sync, artist, title)
@@ -103,6 +115,8 @@ async def resolve_track(artist: str, title: str,
     vid = best["videoId"]
     dur = best.get("duration_seconds")
 
+    # fail_count solo se resetea si cambió el youtube_id.
+    # Si es el mismo id que ya venía fallando, el contador se preserva.
     await execute(
         """
         INSERT INTO text_resolutions (query_hash, artist, title, youtube_id, duration_s)
@@ -111,7 +125,9 @@ async def resolve_track(artist: str, title: str,
           youtube_id  = EXCLUDED.youtube_id,
           duration_s  = EXCLUDED.duration_s,
           verified_at = now(),
-          fail_count  = 0
+          fail_count  = CASE
+            WHEN text_resolutions.youtube_id IS DISTINCT FROM EXCLUDED.youtube_id
+            THEN 0 ELSE text_resolutions.fail_count END
         """,
         qh, artist, title, vid, dur,
     )
@@ -129,16 +145,18 @@ async def resolve_track(artist: str, title: str,
                   youtube_id     = EXCLUDED.youtube_id,
                   duration_delta = EXCLUDED.duration_delta,
                   verified_at    = now(),
-                  fail_count     = 0
+                  fail_count     = CASE
+                    WHEN track_resolutions.youtube_id IS DISTINCT FROM EXCLUDED.youtube_id
+                    THEN 0 ELSE track_resolutions.fail_count END
                 """,
                 recording_mbid, vid, delta,
             )
 
-    return {"artist": artist, "title": title, "url": _url(vid), "cached": False}
+    return _resultado(artist, title, vid, False)
 
 
 async def resolve_tracks(tracks: list[dict]) -> list[dict]:
-    """[{artist, title, recording_mbid?, length_ms?}, ...] → agrega 'url'.
+    """[{artist, title, recording_mbid?, length_ms?}, ...] → agrega 'youtube_id'.
     Concurrencia limitada: el Pi 3B no aguanta 20 búsquedas en paralelo."""
     sem = asyncio.Semaphore(4)
 
@@ -168,10 +186,11 @@ async def resolve_tracks(tracks: list[dict]) -> list[dict]:
     return out
 
 
-async def mark_failed(url: str) -> None:
-    """Llamar cuando mpv/yt-dlp no pudo reproducir. A los 3 fallos el cache lo ignora."""
-    vid = url.rsplit("v=", 1)[-1]
+async def mark_failed(youtube_id: str, motivo: str = "") -> None:
+    """Llamar cuando la descarga o mpv fallaron.
+    A los MAX_FAILS el cache lo ignora y fuerza re-resolución."""
+    logger.warning("marcando fallo en %s: %s", youtube_id, motivo or "sin detalle")
     await execute("UPDATE text_resolutions SET fail_count = fail_count + 1 "
-                  "WHERE youtube_id = $1", vid)
+                  "WHERE youtube_id = $1", youtube_id)
     await execute("UPDATE track_resolutions SET fail_count = fail_count + 1 "
-                  "WHERE youtube_id = $1", vid)
+                  "WHERE youtube_id = $1", youtube_id)
