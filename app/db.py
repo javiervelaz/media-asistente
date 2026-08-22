@@ -17,7 +17,8 @@ async def init_pool() -> asyncpg.Pool:
             min_size=0,
             max_size=4,                # Pi 3B: no te pases
             command_timeout=30,
-            statement_cache_size=0,    # obligatorio con el pooler de Neon
+            statement_cache_size=0, 
+            max_inactive_connection_lifetime=30.0,   # obligatorio con el pooler de Neon
         )
         logger.info("pool de Neon inicializado")
     return _pool
