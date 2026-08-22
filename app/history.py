@@ -1,9 +1,8 @@
 """Señal de feedback: qué se salteó y qué se escuchó entero"""
-import asyncio
 import logging
 
+from app import player
 from app.db import execute
-from app.player import MPVError, get_status
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +46,8 @@ async def register_advance(motivo: str = "next") -> None:
     if not _current["playlist_id"]:
         return
 
-    try:
-        st = await asyncio.to_thread(get_status)
-    except MPVError:
+    st = await player.get_status()
+    if not st.get("mpv_ok"):
         logger.debug("mpv no disponible para el feedback")
         return
 
