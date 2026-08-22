@@ -14,7 +14,7 @@ async def init_pool() -> asyncpg.Pool:
     if _pool is None:
         _pool = await asyncpg.create_pool(
             dsn=settings.database_url,
-            min_size=1,
+            min_size=0,
             max_size=4,                # Pi 3B: no te pases
             command_timeout=30,
             statement_cache_size=0,    # obligatorio con el pooler de Neon
