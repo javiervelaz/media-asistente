@@ -45,9 +45,9 @@ peso AS (
 ),
 senal AS (
     SELECT recording_mbid,
-           count(*) FILTER (WHERE skipped)                       AS skips,
-           count(*) FILTER (WHERE NOT skipped AND played_ms > 0) AS completos,
-           max(started_at)                                       AS ultimo
+           count(*) FILTER (WHERE skipped)   AS skips,
+           count(*) FILTER (WHERE completed) AS completos,
+           max(started_at)                   AS ultimo
     FROM play_history
     WHERE recording_mbid IS NOT NULL
     GROUP BY recording_mbid

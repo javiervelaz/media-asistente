@@ -24,6 +24,7 @@ from app.history import (
     append_current,
     get_track_at,
     register_advance,
+    register_complete,
     set_current,
 )
 from app.llm import generate_playlist
@@ -40,7 +41,7 @@ logger = logging.getLogger("media-asistente")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_pool()
-    player.iniciar_observador(on_fail=mark_failed)
+    player.iniciar_observador(on_fail=mark_failed, on_eof=register_complete)
     yield
     await close_pool()
 

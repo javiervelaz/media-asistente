@@ -165,14 +165,17 @@ async def get_status() -> dict:
 # ---------------------------------------------------------------- observador
 
 _por_path: dict[str, str] = {}     # path absoluto → youtube_id
+MAX_REGISTRO = 500                 # techo: el Pi 3B tiene 1 GB
 
 
 def registrar_track(path: str | Path, youtube_id: str) -> None:
-    """Para poder atribuir un end-file fallido a un youtube_id."""
+    """Para poder atribuir un end-file a un youtube_id (fallido o completo)."""
     _por_path[str(Path(path).resolve())] = youtube_id
+    while len(_por_path) > MAX_REGISTRO:
+        _por_path.pop(next(iter(_por_path)))
 
 
-def _observador(loop: asyncio.AbstractEventLoop, on_fail) -> None:
+def _observador(loop: asyncio.AbstractEventLoop, on_fail, on_eof) -> None:
     """Conexión persistente que lee eventos. Corre en un thread propio."""
     while True:
         try:
@@ -201,12 +204,21 @@ def _observador(loop: asyncio.AbstractEventLoop, on_fail) -> None:
                     if ev.get("event") != "end-file":
                         continue
                     reason = ev.get("reason")
-                    if reason == "eof":
-                        continue
                     if reason == "stop":
                         continue          # stop/next manual, no es error
                     path = ev.get("playlist_entry_path") or ""
                     yid = _por_path.get(str(Path(path).resolve())) if path else None
+
+                    if reason == "eof":
+                        # El track llegó al final: es la única señal positiva
+                        # del sistema. Antes se descartaba acá mismo y el
+                        # término `completos` del scoring valía siempre cero.
+                        if yid and on_eof:
+                            asyncio.run_coroutine_threadsafe(on_eof(yid), loop)
+                        elif not yid:
+                            logger.debug("eof de un path no registrado: %s", path)
+                        continue
+
                     logger.error(
                         "mpv end-file reason=%s file_error=%s path=%s yid=%s",
                         reason, ev.get("file_error"), path, yid)
@@ -220,10 +232,13 @@ def _observador(loop: asyncio.AbstractEventLoop, on_fail) -> None:
         threading.Event().wait(2)
 
 
-def iniciar_observador(on_fail=None) -> None:
+def iniciar_observador(on_fail=None, on_eof=None) -> None:
     """Llamar una vez en el startup de FastAPI.
-    on_fail: coroutine (youtube_id, motivo) -> None, típicamente music.mark_failed."""
+
+    on_fail: coroutine (youtube_id, motivo) -> None, típicamente music.mark_failed.
+    on_eof:  coroutine (youtube_id) -> None, típicamente history.register_complete.
+    """
     loop = asyncio.get_running_loop()
-    t = threading.Thread(target=_observador, args=(loop, on_fail),
+    t = threading.Thread(target=_observador, args=(loop, on_fail, on_eof),
                          daemon=True, name="mpv-observer")
     t.start()
