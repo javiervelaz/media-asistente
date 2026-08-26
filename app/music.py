@@ -17,6 +17,11 @@ RUIDO = ("live", "en vivo", "cover", "remix", "karaoke",
 
 MAX_FAILS = 3
 
+# Tolerancia contra la duración de MusicBrainz. Un delta mayor no es "el mismo
+# tema con otro fade": es un vivo, un remaster extendido o directamente otra
+# canción. La duración es la verificación más fuerte que tenemos.
+DELTA_MAX_MS = 20_000
+
 
 def _hash(artist: str, title: str) -> str:
     key = f"{artist.strip().lower()}|{title.strip().lower()}"
@@ -29,10 +34,35 @@ def _url(video_id: str) -> str:
 
 
 def _elegir(resultados: list, expected_ms: int | None) -> dict | None:
-    """Con duración esperada: gana el más cercano. Sin ella: penaliza ruido."""
+    """Con duración esperada: descarta lo incompatible y gana el más cercano.
+    Sin ella: penaliza ruido.
+
+    Antes esto detectaba el delta grande, escribía un warning y devolvía el
+    track igual: por ahí entraban los vivos y los covers pese al filtro RUIDO,
+    y encima quedaban cacheados en text_resolutions para siempre.
+    """
     candidatos = [r for r in resultados if r.get("videoId")]
     if not candidatos:
         return None
+
+    if expected_ms:
+        viables = [
+            r for r in candidatos
+            if not r.get("duration_seconds")          # sin dato, no lo castigamos
+            or abs(r["duration_seconds"] * 1000 - expected_ms) <= DELTA_MAX_MS
+        ]
+        if not viables:
+            cercano = min(
+                (r for r in candidatos if r.get("duration_seconds")),
+                key=lambda r: abs(r["duration_seconds"] * 1000 - expected_ms),
+                default=None)
+            delta = (abs(cercano["duration_seconds"] * 1000 - expected_ms) // 1000
+                     if cercano else None)
+            logger.info("descartado: ningún candidato compatible con %ds "
+                        "(el más cercano difería en %ss)",
+                        expected_ms // 1000, delta)
+            return None       # sin track es mejor que con el track equivocado
+        candidatos = viables
 
     def score(r):
         s = 0.0
@@ -43,13 +73,7 @@ def _elegir(resultados: list, expected_ms: int | None) -> dict | None:
             s += abs(r["duration_seconds"] * 1000 - expected_ms) / 1000
         return s
 
-    best = min(candidatos, key=score)
-    if expected_ms and best.get("duration_seconds"):
-        delta = abs(best["duration_seconds"] * 1000 - expected_ms)
-        if delta > 25_000:
-            logger.warning("duración sospechosa: %r (delta %ds)",
-                           best.get("title"), delta // 1000)
-    return best
+    return min(candidatos, key=score)
 
 
 def _buscar_sync(artist: str, title: str) -> list:

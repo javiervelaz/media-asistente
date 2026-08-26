@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     curator_model: str = "claude-sonnet-4-6"
     curator_enabled: bool = True
     local_search_enabled: bool = False
+    # Proporcion maxima de tracks sin respaldo en un tool result (0..1).
+    # 1.0 = solo medir, no recortar. 0.0 = estricto, solo verificados.
+    curator_max_libres: float = 0.2
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com.com )"
 
 

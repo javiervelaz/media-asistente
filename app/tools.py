@@ -126,13 +126,44 @@ async def query_releases(artist_mbids: list[str] | None = None,
             for r in rows]
 
 
-async def get_recordings(release_mbid: str) -> list[dict]:
+async def get_recordings(release_mbid: str) -> dict:
+    """Tracklist de un album, con el artista al que pertenece.
+
+    Devuelve el artista una sola vez (y no repetido en cada track) porque el
+    curador lo necesita para armar la playlist: sin el, un recording_mbid es
+    un identificador sin nombre y no hay forma de verificar despues que el
+    track que devolvio existe de verdad.
+
+    `listo` marca los que ya estan resueltos en YouTube: arrancan al instante
+    en vez de costar una busqueda mas una descarga con yt-dlp.
+    """
+    cab = await fetchrow(
+        """
+        SELECT a.name AS artist, a.mbid AS artist_mbid, r.title AS release
+        FROM releases r JOIN artists a ON a.mbid = r.artist_mbid
+        WHERE r.mbid = $1
+        """, release_mbid)
+
     rows = await fetch(
-        "SELECT mbid, title, position, length_ms FROM recordings "
-        "WHERE release_mbid = $1 ORDER BY position", release_mbid)
+        """
+        SELECT r.mbid, r.title, r.position, r.length_ms,
+               (tr.recording_mbid IS NOT NULL AND tr.fail_count < 3) AS listo
+        FROM recordings r
+        LEFT JOIN track_resolutions tr ON tr.recording_mbid = r.mbid
+        WHERE r.release_mbid = $1 ORDER BY r.position
+        """, release_mbid)
+
     if rows:
-        return [{**dict(r), "mbid": str(r["mbid"])} for r in rows]
-    return await hydrate_recordings(release_mbid)
+        tracks = [{**dict(r), "mbid": str(r["mbid"])} for r in rows]
+    else:
+        tracks = await hydrate_recordings(release_mbid)
+
+    return {
+        "artist": cab["artist"] if cab else None,
+        "artist_mbid": str(cab["artist_mbid"]) if cab else None,
+        "release": cab["release"] if cab else None,
+        "tracks": tracks,
+    }
 
 
 async def get_play_history(days: int = 30) -> list[dict]:

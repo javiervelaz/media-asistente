@@ -396,12 +396,14 @@ async def create_playlist(req: PlaylistRequest):
     usar_curador = (settings.curator_enabled
                     if req.use_curator is None else req.use_curator)
     concept = narration = ""
+    metricas = None
 
     if usar_curador:
         try:
             data = await curate(req.prompt, req.n_tracks)
             concept = data.get("concept", "")
             narration = data.get("narration", "")
+            metricas = data.get("metrics")
         except Exception:
             logger.exception("curador falló, cayendo al generador simple")
             data = await asyncio.to_thread(generate_playlist, req.prompt)
@@ -426,6 +428,8 @@ async def create_playlist(req: PlaylistRequest):
 
     resp["concept"] = concept
     resp["narration"] = narration
+    if metricas:
+        resp["verificacion"] = metricas
     return resp
 
 

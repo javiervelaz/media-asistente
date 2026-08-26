@@ -11,6 +11,7 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 MAX_TOKENS = 8192
 MAX_TOOL_RESULT = 4_000   # truncado para no inflar el contexto en cada turno
+MIN_PLAYLIST = 8          # piso: por debajo, la cuota de libres cede
 RESERVA_NOTA = 200        # espacio para la nota de truncamiento
 
 
@@ -134,10 +135,12 @@ TOOLS = [
     {
         "name": "get_recordings",
         "description": (
-            "Tracklist de un álbum, con mbid y duración de cada track. "
-            "Si no está en la base la trae de MusicBrainz. Incluir el "
-            "recording_mbid y el length_ms en la playlist final mejora mucho "
-            "la precisión de la búsqueda en YouTube."
+            "Tracklist de un álbum: artista, y mbid, duración y disponibilidad "
+            "de cada track. Si no está en la base la trae de MusicBrainz. "
+            "SOLO podés incluir en la playlist tracks que hayas visto acá: "
+            "el recording_mbid es lo que permite verificar que existen. "
+            "`listo: true` significa que el track ya está resuelto y arranca "
+            "al instante; a igualdad de criterio curatorial, preferilos."
         ),
         "input_schema": {
             "type": "object",
@@ -181,7 +184,7 @@ Criterios de curaduría:
 - Evitá compilados, versiones en vivo y remixes salvo pedido explícito.
 - Priorizá álbumes con weight 1 (la colección del usuario) cuando encajen.
 
-No hagas más de 6 llamadas a herramientas. Cuando tengas material suficiente, cerrá.
+No hagas más de 10 llamadas a herramientas. Cuando tengas material suficiente, cerrá.
 
 Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
 {
@@ -193,10 +196,15 @@ Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
      "rationale": "una frase: por qué está y por qué en esta posición"}
   ]
 }
-Antes de cerrar, pasá get_recordings por los 2 o 3 álbumes que más peso tienen
-en la playlist y usá esos recording_mbid y length_ms. Con eso la búsqueda en
-YouTube deja de traer covers y versiones en vivo.
-Incluí recording_mbid y length_ms solo si los sacaste de get_recordings. Si no, dejalos en null.
+Antes de armar la lista final, pasá get_recordings por TODOS los álbumes de los
+que vayas a sacar tracks, y elegí únicamente entre los tracks que viste ahí.
+El recording_mbid es lo que hace verificable un track: sin él no hay forma de
+saber si existe, y YouTube siempre devuelve algo, así que un tema inventado no
+falla —suena—. Si un álbum que te interesa no tiene tracklist cargada, traela:
+para eso está la herramienta.
+
+Una playlist de 14 tracks reales vale más que una de 20 con 6 inventados.
+Incluí recording_mbid y length_ms tal como te los dio get_recordings.
 Mantené cada rationale en una sola frase corta: la respuesta tiene que entrar completa."""
 
 # System como lista de bloques, con breakpoint de cache
@@ -208,6 +216,26 @@ SYSTEM_BLOCKS = [{
 
 # Breakpoint al final de las tools: cachea todos los schemas
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
+
+def _registrar_vistos(nombre: str, args: dict, out, vistos: dict) -> None:
+    """Acumula los recordings que el modelo vio de verdad en un tool result.
+
+    Es la unica fuente de verdad sobre que puede nombrar: YouTube siempre
+    encuentra *algo*, asi que un track inventado no falla ruidosamente, suena.
+    Sin este registro no hay forma de distinguirlo de uno real.
+    """
+    if nombre != "get_recordings" or not isinstance(out, dict):
+        return
+    artist = out.get("artist")
+    for tr in out.get("tracks") or []:
+        mbid = str(tr.get("mbid") or "").strip()
+        if mbid:
+            vistos[mbid] = {
+                "artist": artist,
+                "title": tr.get("title"),
+                "length_ms": tr.get("length_ms"),
+            }
+
 
 def _mover_breakpoint(mensajes: list) -> None:
     """Un solo breakpoint móvil sobre el último tool_result.
@@ -223,12 +251,13 @@ def _mover_breakpoint(mensajes: list) -> None:
             ultimo["cache_control"] = {"type": "ephemeral"}
 
 
-async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
+async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8) -> dict:
     mensajes = [{
         "role": "user",
         "content": f"{prompt}\n\nArmá una playlist de {n_tracks} tracks.",
     }]
     uso = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+    vistos: dict[str, dict] = {}   # recording_mbid -> lo que el modelo vio
 
     for turno in range(max_turns):
         resp = await client.messages.create(
@@ -250,7 +279,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
         if resp.stop_reason != "tool_use":
             logger.info("tokens — in:%(in)d out:%(out)d "
                         "cache_r:%(cache_read)d cache_w:%(cache_write)d", uso)
-            return _parse(resp)
+            return _parse(resp, vistos)
 
         resultados = []
         for block in resp.content:
@@ -263,6 +292,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
             except Exception as e:
                 logger.exception("tool %s falló", block.name)
                 out = {"error": str(e)}
+            _registrar_vistos(block.name, block.input, out, vistos)
             resultados.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
@@ -276,7 +306,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
     raise RuntimeError(f"el curador no convergió en {max_turns} turnos")
 
 
-def _parse(resp) -> dict:
+def _parse(resp, vistos: dict | None = None) -> dict:
     """Extrae y valida el JSON final. Tolera preámbulo y code fences."""
     texto = "".join(b.text for b in resp.content if b.type == "text").strip()
 
@@ -340,7 +370,74 @@ def _parse(resp) -> dict:
         raise ValueError("ningún track tiene artist y title")
     if len(validos) < len(tracks):
         logger.warning("descartados %d tracks mal formados", len(tracks) - len(validos))
-    data["tracks"] = validos
 
-    logger.info("playlist %r: %d tracks", data.get("title"), len(validos))
+    validos, metricas = _clasificar(validos, vistos or {})
+    data["tracks"] = validos
+    data["metrics"] = metricas
+
+    logger.info("playlist %r: %d tracks (%d verificados, %d libres)",
+                data.get("title"), len(validos),
+                metricas["verificados"], metricas["libres"])
     return data
+
+
+def _clasificar(tracks: list[dict], vistos: dict) -> tuple[list[dict], dict]:
+    """Separa lo que el modelo vio en un tool result de lo que puso de memoria.
+
+    Los `libres` no se descartan de entrada —a veces el modelo acierta y la
+    base esta incompleta— pero se acotan por cuota y van al final: una
+    alucinacion en el track 18 molesta mucho menos que en el track 2.
+    """
+    verificados, libres = [], []
+    for t in tracks:
+        mbid = str(t.get("recording_mbid") or "").strip()
+        ref = vistos.get(mbid) if mbid else None
+        if ref:
+            t["origen"] = "verificado"
+            # El modelo a veces transcribe mal el titulo: mandamos el de la base
+            t["title"] = ref["title"] or t["title"]
+            t["artist"] = ref["artist"] or t["artist"]
+            if t.get("length_ms") is None:
+                t["length_ms"] = ref["length_ms"]
+            verificados.append(t)
+        else:
+            t["origen"] = "libre"
+            if mbid:
+                logger.warning("mbid que no salio de ningun tool result: %s — %s",
+                               t.get("artist"), t.get("title"))
+                t["recording_mbid"] = None   # no ensuciamos track_resolutions
+            libres.append(t)
+
+    if not vistos:
+        # El modelo nunca llego a un get_recordings: la verificacion no estuvo
+        # disponible, no es que haya inventado todo. Recortar aca dejaria la
+        # playlist en un track por una falla de tools. Medimos y dejamos pasar.
+        logger.warning("ningun get_recordings en la sesion: no aplico cuota, "
+                       "%d tracks van sin verificar", len(libres))
+        recortados = libres
+    else:
+        cupo = settings.curator_max_libres
+        permitidos = len(tracks) if cupo >= 1 else int(len(tracks) * cupo)
+        recortados = libres[:permitidos]
+
+        # Piso: un cover ocasional molesta menos que una cola que se queda seca.
+        # No aplica con cupo 0: si el operador pidio modo estricto, es estricto.
+        # El piso nunca puede ser mayor que el material disponible.
+        piso = min(MIN_PLAYLIST, len(tracks)) if cupo > 0 else 0
+        faltan = piso - (len(verificados) + len(recortados))
+        if faltan > 0 and len(libres) > len(recortados):
+            extra = libres[len(recortados):len(recortados) + faltan]
+            logger.warning("piso de %d tracks: dejo entrar %d libres de mas",
+                           piso, len(extra))
+            recortados += extra
+
+        for t in libres[len(recortados):]:
+            logger.info("fuera por cuota (sin respaldo): %s — %s",
+                        t.get("artist"), t.get("title"))
+
+    return verificados + recortados, {
+        "verificados": len(verificados),
+        "libres": len(recortados),
+        "descartados_por_cuota": len(libres) - len(recortados),
+        "vistos_en_tools": len(vistos),
+    }
