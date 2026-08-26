@@ -11,6 +11,53 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 MAX_TOKENS = 8192
 MAX_TOOL_RESULT = 4_000   # truncado para no inflar el contexto en cada turno
+RESERVA_NOTA = 200        # espacio para la nota de truncamiento
+
+
+def _truncar(out) -> str:
+    """Serializa un tool result sin cortarlo a mitad de token JSON.
+
+    Cortar por caracteres le entrega al modelo un JSON invalido y sin marca
+    de que falta algo: lo completa de memoria. Truncamos por elementos y
+    decimos explicitamente cuantos quedaron afuera.
+    """
+    txt = json.dumps(out, default=str)
+    if len(txt) <= MAX_TOOL_RESULT:
+        return txt
+
+    if isinstance(out, list):
+        items = list(out)
+        while items and len(json.dumps(items, default=str)) > MAX_TOOL_RESULT - RESERVA_NOTA:
+            items.pop()
+        logger.info("tool result truncado: %d de %d elementos", len(items), len(out))
+        return json.dumps({
+            "items": items,
+            "truncado": True,
+            "nota": (f"Se muestran {len(items)} de {len(out)} resultados. "
+                     "Afina los filtros si necesitas ver el resto."),
+        }, default=str)
+
+    if isinstance(out, dict):
+        for clave in ("conectados", "items", "tracks"):
+            if isinstance(out.get(clave), list):
+                recorte = dict(out)
+                items = list(out[clave])
+                while items and len(json.dumps({**recorte, clave: items}, default=str)) > MAX_TOOL_RESULT - RESERVA_NOTA:
+                    items.pop()
+                recorte[clave] = items
+                recorte["truncado"] = True
+                recorte["nota"] = (f"Se muestran {len(items)} de {len(out[clave])} "
+                                   "resultados. Afina los filtros o pedi menos.")
+                logger.info("tool result truncado: %d de %d en %r",
+                            len(items), len(out[clave]), clave)
+                return json.dumps(recorte, default=str)
+
+    logger.warning("tool result no truncable por elementos (%d chars)", len(txt))
+    return json.dumps({
+        "truncado": True,
+        "nota": "El resultado era demasiado grande. Pedi menos datos.",
+        "preview": txt[:MAX_TOOL_RESULT - RESERVA_NOTA],
+    })
 
 
 
@@ -219,7 +266,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 6) -> dict:
             resultados.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
-                "content": json.dumps(out, default=str)[:MAX_TOOL_RESULT],
+                "content": _truncar(out),
             })
 
         mensajes.append({"role": "user", "content": resultados})

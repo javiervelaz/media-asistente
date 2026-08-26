@@ -100,6 +100,18 @@ def _fire(coro) -> "asyncio.Task":
     return t
 
 
+def _set_resto(coro) -> "asyncio.Task":
+    """Registra la task que produce la cola de la playlist en curso.
+
+    Tiene que haber UNA sola por playlist: si hay dos encolando en paralelo
+    las posiciones de play_history se pisan y el feedback de skips queda
+    atribuido al track equivocado.
+    """
+    global _resto_task
+    _resto_task = _fire(coro)
+    return _resto_task
+
+
 def _cancel_resto() -> None:
     """Cancela la resolución en background de la playlist anterior."""
     global _resto_task
@@ -246,16 +258,9 @@ async def _resolver_resto(pendientes: list, playlist_id, room_id: str,
     if not pendientes:
         return
     try:
-        resto = await resolve_tracks(pendientes)
-        encolados = []
-        for t in resto:
-            if await _encolar(t):
-                encolados.append(t)
-        logger.info("encolados %d/%d tracks adicionales", len(encolados), len(resto))
-
-        if encolados:
-            append_current(encolados)
-            await _log_history(encolados, room_id, playlist_id, offset=offset)
+        encolados = await _encolar_lote(pendientes, playlist_id, room_id, offset)
+        logger.info("encolados %d/%d tracks adicionales",
+                    len(encolados), len(pendientes))
     except asyncio.CancelledError:
         logger.info("resolución en background cancelada")
         raise
@@ -268,13 +273,17 @@ async def _resolver_resto(pendientes: list, playlist_id, room_id: str,
 async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
                   source: str = "curator", prompt: str | None = None,
                   play_now: bool = True, fade: bool = False,
-                  fade_target: int = 65, fade_seconds: int = 30) -> dict:
+                  fade_target: int = 65, fade_seconds: int = 30,
+                  resolver_resto: bool = True) -> dict:
     """Resuelve la cabeza, arranca mpv y encola el resto en background.
 
     Todo lo que reproduce pasa por acá: /playlist, /despertador, /replay
     y /searchInHistory. `propuestos` son tracks sin resolver.
+
+    resolver_resto=False deja la cola en manos del que llama: lo usa el modo
+    hybrid, donde el curador es el único productor y encola primero el resto
+    de los locales. Dos productores en paralelo pisan las posiciones.
     """
-    global _resto_task
 
     if not propuestos:
         raise HTTPException(404, "no hay tracks para reproducir")
@@ -308,10 +317,9 @@ async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
 
         set_current(playlist_id, encolados)
         _fire(_log_history(encolados, room_id, playlist_id, offset=0))
-        _resto_task = _fire(
-            _resolver_resto(propuestos[ARRANQUE:], playlist_id,
-                            room_id, offset=len(encolados))
-        )
+        if resolver_resto:
+            _set_resto(_resolver_resto(propuestos[ARRANQUE:], playlist_id,
+                                       room_id, offset=len(encolados)))
 
     return {
         "playlist_id": str(playlist_id),
@@ -364,17 +372,21 @@ async def create_playlist(req: PlaylistRequest):
             return resp
 
         if via == "hybrid":
+            cabeza = candidatos[:local_search.MIN_TRACKS_HEAD]
             resp = await _lanzar(
-                candidatos[:local_search.MIN_TRACKS_HEAD], req.prompt,
+                cabeza, req.prompt,
                 req.room_id, source="hybrid", prompt=req.prompt,
                 play_now=req.play_now, fade=req.fade,
                 fade_target=req.fade_target, fade_seconds=req.fade_seconds,
+                resolver_resto=False,   # el completador es el único productor
             )
             if req.play_now:
-                _fire(_completar_con_curador(
+                _set_resto(_completar_cola_hybrid(
                     uuid.UUID(resp["playlist_id"]), req.prompt,
-                    candidatos[:local_search.MIN_TRACKS_HEAD],
-                    req.n_tracks, req.room_id, offset=resp["queued"],
+                    locales_pendientes=cabeza[ARRANQUE:],
+                    ya_sonando=resp["tracks"],
+                    n_tracks=req.n_tracks, room_id=req.room_id,
+                    offset=resp["queued"],
                 ))
             resp["concept"] = resp["narration"] = ""
             return resp
@@ -416,28 +428,57 @@ async def create_playlist(req: PlaylistRequest):
     return resp
 
 
-async def _completar_con_curador(playlist_id: uuid.UUID, prompt: str,
-                                 ya_locales: list[dict], n_tracks: int,
+async def _encolar_lote(propuestos: list[dict], playlist_id: uuid.UUID,
+                        room_id: str, offset: int) -> list[dict]:
+    """Resuelve, baja y encola un lote. Devuelve lo que entró a la cola.
+
+    `offset` es la posición de mpv del primer track del lote: tiene que ser
+    la cantidad de tracks ya encolados, no un número calculado por el que llama.
+    """
+    if not propuestos:
+        return []
+    resueltos = await resolve_tracks(propuestos)
+    encolados = []
+    for t in resueltos:
+        if await _encolar(t):
+            encolados.append(t)
+    if encolados:
+        append_current(encolados)
+        await _log_history(encolados, room_id, playlist_id, offset=offset)
+    return encolados
+
+
+async def _completar_cola_hybrid(playlist_id: uuid.UUID, prompt: str,
+                                 locales_pendientes: list[dict],
+                                 ya_sonando: list[dict], n_tracks: int,
                                  room_id: str, offset: int) -> None:
-    """Modo hybrid: los locales ya están sonando, el curador completa la cola."""
+    """Único productor de cola en modo hybrid.
+
+    Encola en dos etapas SECUENCIALES —primero el resto de los locales,
+    después lo que traiga el curador— para que `position` en play_history
+    siga siendo el índice real de mpv. Antes esto corría en paralelo con
+    _resolver_resto y las dos series de posiciones se pisaban.
+    """
     try:
-        sonando = "\n".join(f"- {t['artist']} — {t['title']}" for t in ya_locales)
+        pos = offset
+        locales = await _encolar_lote(locales_pendientes, playlist_id,
+                                      room_id, offset=pos)
+        pos += len(locales)
+        logger.info("hybrid: %d locales encolados, cola en %d", len(locales), pos)
+
+        ya = ya_sonando + locales
+        faltan = max(1, n_tracks - len(ya))
+        sonando = "\n".join(f"- {t['artist']} — {t['title']}" for t in ya)
         prompt_ext = (
             f"{prompt}\n\nYa están sonando estos tracks, NO los repitas "
             f"ni traigas otras versiones de los mismos temas:\n{sonando}"
         )
-        data = await curate(prompt_ext, max(1, n_tracks - len(ya_locales)))
-        resto = await resolve_tracks(data["tracks"])
-        encolados = []
-        for t in resto:
-            if await _encolar(t):
-                encolados.append(t)
-
-        if encolados:
-            append_current(encolados)
-            await _log_history(encolados, room_id, playlist_id, offset=offset)
+        data = await curate(prompt_ext, faltan)
+        encolados = await _encolar_lote(data["tracks"], playlist_id,
+                                        room_id, offset=pos)
         logger.info("hybrid: el curador sumó %d tracks", len(encolados))
     except asyncio.CancelledError:
+        logger.info("hybrid: cola cancelada por una playlist nueva")
         raise
     except Exception:
         logger.exception("hybrid: el curador falló, sigue con los locales")
