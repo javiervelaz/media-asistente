@@ -60,9 +60,13 @@ async def test_update() -> bool:
         await tx.start()
         try:
             pid = uuid.uuid4()
+            # playlists.source tiene un CHECK: en vez de adivinar los valores
+            # permitidos, reusamos uno que ya esta en la tabla.
+            source = await conn.fetchval(
+                "SELECT source FROM playlists WHERE source IS NOT NULL LIMIT 1")
             await conn.execute(
                 "INSERT INTO playlists (id, title, source) VALUES ($1, $2, $3)",
-                pid, "TEST verificar_bloque_b", "test")
+                pid, "TEST verificar_bloque_b", source)
 
             # pos 0: mismo yid, ya skipeado -> no se debe tocar
             # pos 1: mismo yid, limpio     -> este es el que hay que marcar

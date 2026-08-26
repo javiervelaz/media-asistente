@@ -43,6 +43,15 @@ WHERE NOT completed
 
 
 async def main() -> None:
+    # El pool vive en ESTE loop: cerrarlo desde otro asyncio.run() revienta
+    # con "Event loop is closed" aunque la migración haya salido bien.
+    try:
+        await _migrar()
+    finally:
+        await close_pool()
+
+
+async def _migrar() -> None:
     for ddl in DDL:
         await execute(ddl)
         log.info("ok: %s", " ".join(ddl.split())[:70])
@@ -74,7 +83,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    finally:
-        asyncio.run(close_pool())
+    asyncio.run(main())
