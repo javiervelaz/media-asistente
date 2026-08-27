@@ -12,6 +12,7 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 MAX_TOKENS = 8192
 MAX_TOOL_RESULT = 4_000   # truncado para no inflar el contexto en cada turno
 MIN_PLAYLIST = 8          # piso: por debajo, la cuota de libres cede
+MAX_POR_ARTISTA = 2       # techo base; sube solo si no hay variedad disponible
 RESERVA_NOTA = 200        # espacio para la nota de truncamiento
 
 
@@ -227,11 +228,13 @@ def _registrar_vistos(nombre: str, args: dict, out, vistos: dict) -> None:
     if nombre != "get_recordings" or not isinstance(out, dict):
         return
     artist = out.get("artist")
+    artist_mbid = out.get("artist_mbid")
     for tr in out.get("tracks") or []:
         mbid = str(tr.get("mbid") or "").strip()
         if mbid:
             vistos[mbid] = {
                 "artist": artist,
+                "artist_mbid": artist_mbid,
                 "title": tr.get("title"),
                 "length_ms": tr.get("length_ms"),
             }
@@ -279,7 +282,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8) -> dict:
         if resp.stop_reason != "tool_use":
             logger.info("tokens — in:%(in)d out:%(out)d "
                         "cache_r:%(cache_read)d cache_w:%(cache_write)d", uso)
-            return _parse(resp, vistos)
+            return _parse(resp, vistos, n_tracks)
 
         resultados = []
         for block in resp.content:
@@ -306,7 +309,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8) -> dict:
     raise RuntimeError(f"el curador no convergió en {max_turns} turnos")
 
 
-def _parse(resp, vistos: dict | None = None) -> dict:
+def _parse(resp, vistos: dict | None = None, n_tracks: int = 20) -> dict:
     """Extrae y valida el JSON final. Tolera preámbulo y code fences."""
     texto = "".join(b.text for b in resp.content if b.type == "text").strip()
 
@@ -371,7 +374,7 @@ def _parse(resp, vistos: dict | None = None) -> dict:
     if len(validos) < len(tracks):
         logger.warning("descartados %d tracks mal formados", len(tracks) - len(validos))
 
-    validos, metricas = _clasificar(validos, vistos or {})
+    validos, metricas = _clasificar(validos, vistos or {}, n_tracks)
     data["tracks"] = validos
     data["metrics"] = metricas
 
@@ -381,7 +384,8 @@ def _parse(resp, vistos: dict | None = None) -> dict:
     return data
 
 
-def _clasificar(tracks: list[dict], vistos: dict) -> tuple[list[dict], dict]:
+def _clasificar(tracks: list[dict], vistos: dict,
+                n_tracks: int = 20) -> tuple[list[dict], dict]:
     """Separa lo que el modelo vio en un tool result de lo que puso de memoria.
 
     Los `libres` no se descartan de entrada —a veces el modelo acierta y la
@@ -397,6 +401,7 @@ def _clasificar(tracks: list[dict], vistos: dict) -> tuple[list[dict], dict]:
             # El modelo a veces transcribe mal el titulo: mandamos el de la base
             t["title"] = ref["title"] or t["title"]
             t["artist"] = ref["artist"] or t["artist"]
+            t["artist_mbid"] = ref.get("artist_mbid")
             if t.get("length_ms") is None:
                 t["length_ms"] = ref["length_ms"]
             verificados.append(t)
@@ -435,9 +440,71 @@ def _clasificar(tracks: list[dict], vistos: dict) -> tuple[list[dict], dict]:
             logger.info("fuera por cuota (sin respaldo): %s — %s",
                         t.get("artist"), t.get("title"))
 
-    return verificados + recortados, {
-        "verificados": len(verificados),
-        "libres": len(recortados),
+    salida = verificados + recortados
+    n_antes = len(salida)
+    salida = _acotar_densidad(salida, vistos, n_tracks)
+
+    return salida, {
+        "verificados": sum(1 for t in salida if t["origen"] == "verificado"),
+        "libres": sum(1 for t in salida if t["origen"] == "libre"),
         "descartados_por_cuota": len(libres) - len(recortados),
+        "descartados_por_densidad": n_antes - len(salida),
         "vistos_en_tools": len(vistos),
     }
+
+
+def _clave_artista(t: dict) -> str:
+    """artist_mbid si lo hay; si no, el nombre normalizado.
+
+    El mbid evita que 'Los Palmeras' y 'los palmeras' cuenten como dos.
+    """
+    mbid = t.get("artist_mbid")
+    if mbid:
+        return str(mbid)
+    return (t.get("artist") or "").strip().lower()
+
+
+def _acotar_densidad(tracks: list[dict], vistos: dict,
+                     n_tracks: int) -> list[dict]:
+    """Impone el maximo de tracks por artista, respetando la secuencia.
+
+    El prompt ya lo pide, pero es una regla que el modelo cumple solo cuando
+    hay material variado: en un dominio con pocos artistas hidratados colapsa
+    al que tiene mas discos. Y es un fallo mudo, porque esos tracks de mas
+    estan verificados: el ratio da 100% y la playlist igual esta mal.
+
+    El techo se adapta a la variedad que el propio curador encontro. Si vio 10
+    artistas y le pidieron 12 tracks, 2 por artista alcanza de sobra. Si vio
+    uno solo —un pedido monografico, "ponete algo de Sumo"— acotar a 2 seria
+    romper justo lo que pidieron, asi que el techo sube.
+    """
+    if not vistos:
+        return tracks
+
+    artistas_vistos = len({v.get("artist_mbid") or v.get("artist")
+                           for v in vistos.values()
+                           if v.get("artist_mbid") or v.get("artist")})
+    if artistas_vistos <= 1:
+        return tracks     # monografico: el tope no tiene sentido
+
+    # techo = lo que haria falta para llenar la playlist repartiendo parejo
+    necesario = -(-max(n_tracks, 1) // artistas_vistos)   # ceil
+    techo = max(MAX_POR_ARTISTA, necesario)
+
+    cuenta: dict[str, int] = {}
+    salida, fuera = [], []
+    for t in tracks:
+        k = _clave_artista(t)
+        if cuenta.get(k, 0) >= techo:
+            fuera.append(t)
+            continue
+        cuenta[k] = cuenta.get(k, 0) + 1
+        salida.append(t)
+
+    if fuera:
+        logger.info("densidad: techo %d por artista (%d artistas vistos), "
+                    "%d tracks afuera", techo, artistas_vistos, len(fuera))
+        for t in fuera:
+            logger.debug("  fuera por densidad: %s — %s",
+                         t.get("artist"), t.get("title"))
+    return salida

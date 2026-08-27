@@ -80,10 +80,20 @@ async def test_curador(prompt: str) -> bool:
                  else f"{AMAR}?{FIN}")
         print(f"   {marca} {t['artist']} — {t['title']}")
 
+    por_artista: dict[str, int] = {}
+    for t in tracks:
+        por_artista[t["artist"]] = por_artista.get(t["artist"], 0) + 1
+    tope = max(por_artista.values()) if por_artista else 0
+
     print(f"\n  recordings vistos en tools: {m.get('vistos_en_tools', 0)}")
     print(f"  verificados: {verif}/{total} ({ratio:.0f}%)")
     print(f"  libres:      {m.get('libres', 0)}")
-    print(f"  fuera por cuota: {m.get('descartados_por_cuota', 0)}")
+    print(f"  fuera por cuota:    {m.get('descartados_por_cuota', 0)}")
+    print(f"  fuera por densidad: {m.get('descartados_por_densidad', 0)}")
+    print(f"  artistas distintos: {len(por_artista)} "
+          f"(máximo por artista: {tope})")
+    if tope > 3:
+        print(f"  {AMAR}un artista concentra {tope} tracks: revisá la densidad{FIN}")
 
     if m.get("vistos_en_tools", 0) == 0:
         print(f"  {ROJO}el modelo no llamó a get_recordings: no hubo "
