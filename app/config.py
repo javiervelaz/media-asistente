@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Proporcion maxima de tracks sin respaldo en un tool result (0..1).
     # 1.0 = solo medir, no recortar. 0.0 = estricto, solo verificados.
     curator_max_libres: float = 0.2
-    mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com.com )"
+    mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 
 
 settings = Settings()
