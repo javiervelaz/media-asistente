@@ -20,7 +20,13 @@ MAX_FAILS = 3
 # Tolerancia contra la duración de MusicBrainz. Un delta mayor no es "el mismo
 # tema con otro fade": es un vivo, un remaster extendido o directamente otra
 # canción. La duración es la verificación más fuerte que tenemos.
-DELTA_MAX_MS = 20_000
+#
+# Fijo en 20s castigaba tracks cortos (The Thin Ice, 2:27 → 20s es el 14% del
+# tema) y era laxo con los largos (un medley de 8 minutos pasa cualquier
+# delta absoluto razonable). Proporcional al esperado, con piso y techo para
+# no volverse ridículo en los extremos.
+def _delta_max(expected_ms: int) -> int:
+    return max(8_000, min(25_000, int(expected_ms * 0.08)))
 
 
 def _hash(artist: str, title: str) -> str:
@@ -46,10 +52,11 @@ def _elegir(resultados: list, expected_ms: int | None) -> dict | None:
         return None
 
     if expected_ms:
+        delta_max = _delta_max(expected_ms)
         viables = [
             r for r in candidatos
             if not r.get("duration_seconds")          # sin dato, no lo castigamos
-            or abs(r["duration_seconds"] * 1000 - expected_ms) <= DELTA_MAX_MS
+            or abs(r["duration_seconds"] * 1000 - expected_ms) <= delta_max
         ]
         if not viables:
             cercano = min(

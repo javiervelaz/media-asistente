@@ -1,0 +1,162 @@
+curl -s -X POST http://localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt": "post-punk británico de los 80"}' | head -c 400
+
+
+curl -s -X POST http://localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"el árbol genealógico de Bauhaus","n_tracks":15,"play_now":false}' \
+  | python -m json.tool
+
+curl -s -X POST http://localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"el árbol genealógico de Bauhaus","play_now":false,"use_curator":false}' \
+  | python -m json.tool
+
+curl -s -X POST http://localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"algo tranquilo","n_tracks":8}' | python -m json.tool
+
+
+
+create playlist
+{
+  "prompt": "{{ $('Telegram Trigger').item.json.message.text.replace(/"/g, '\\"') }}"
+}
+telegram
+✅ *{{ $json.title }}*
+
+🎵 Sonando: _{{ $json.first_track.artist }} - {{ $json.first_track.title }}_
+
+📀 Cola: {{ $json.queued }} tracks
+
+
+curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" http://localhost:8000/playlists?limit=3 | python -m json.tool
+
+curl -s -X POST -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "http://localhost:8000/playlist/a330ce73-e543-4277-a666-67024fce43bb/replay" | python -m json.tool
+
+
+
+for p in "the cult" "gustavo cerati" "post punk británico" "algo tranquilo para cocinar"; do
+  echo -n "$p → "
+  curl -s -X POST -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+    -d "{\"prompt\":\"$p\"}" \
+    "http://localhost:8000/searchInHistory" | python -c "import sys,json; d=json.load(sys.stdin); print(d['via'], d['count'])"
+done
+
+curl -s -X POST -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"the beatles"}' "http://localhost:8000/searchInHistory" \
+  | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d['via'], d['count'])
+for t in d['tracks']:
+    print(f\"  {'✓' if t['cached'] else ' '} {t['artist']} — {t['title']}\")"
+
+source .venv/bin/activate
+API_KEY=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo
+
+for p in "rolling stones" "the beatles" "the cult" "gustavo cerati" \
+         "soda stereo" "john lennon" "post punk británico" \
+         "algo tranquilo para cocinar"; do
+  printf '%-30s → ' "$p"
+  curl -s -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"prompt\":\"$p\"}" "http://localhost:8000/searchInHistory" \
+    | python -c "import sys,json; d=json.load(sys.stdin); print(d['via'], d['count'])"
+done
+
+play - Reanudar reproducción
+status - Qué está sonando
+pause - Pausar
+repetir - Volver a escuchar una playlist anterior
+next - Siguiente canción
+prev - Canción anterior
+stop - Detener
+vol_up - Subir volumen
+vol_down - Bajar volumen
+vol - Fijar volumen (0-100)
+despertador - Configurar el despertador
+
+curl -s -X POST http://localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"rock argentino 78-82","n_tracks":10,"play_now":false}' \
+  | python3 -m json.tool
+
+
+curl -s -X POST https://media.countercrm.com/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  -H "CF-Access-Client-Id: 7ea9bcebbc6770d53b415c9365c01093.access" \
+  -H "CF-Access-Client-Secret: f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"post-punk británico 78-82","n_tracks":10,"play_now":false}' \
+  --max-time 120 \
+  | python3 -m json.tool
+
+curl -s -X POST -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"n_tracks":15,"fade":false,"room_id":"despertador"}' \
+  "http://localhost:8000/despertador" \
+  | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d['title']); print(d['concept']); print()
+for t in d['proposed']: print(f\"  {t['artist']:28} {t['title']}\")"
+
+Fijate si el reparto quedó parejo y si los discos elegidos tienen sentido para hoy.
+
+API_KEY=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo
+curl -s -X POST -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"the beatles"}' "http://localhost:8000/searchInHistory" \
+  | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d['via'], d['count'])
+for t in d['tracks']: print(f\"  {t['artist']:26} {t['title']}\")"
+
+curl -s -X POST -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"the beatles"}' "http://localhost:8000/searchInHistory" \
+  | python -c "
+import sys,json
+d=json.load(sys.stdin)
+print(d['via'], d['count'])
+for t in d['tracks']: print(f\"  {t['artist']:26} {t['title']}\")"
+
+API_KEY=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo
+for p in "the beatles" "rolling stones" "the cult" "gustavo cerati" \
+         "soda stereo" "john lennon" "post punk británico"; do
+  printf '%-24s → ' "$p"
+  curl -s -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"prompt\":\"$p\"}" "http://localhost:8000/searchInHistory" \
+    | python -c "import sys,json; d=json.load(sys.stdin); print(d['via'], d['count'])"
+done
+
+
+curl -s -X POST localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt":"the cult","n_tracks":5}'
+
+curl -s -X POST localhost:8000/searchInHistory?play=false \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt": "killing joke"}' | jq '{via, count}'
+
+curl -s -X POST localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt": "killing joke", "use_local": true, "n_tracks": 20}' \
+  | jq '{playlist_id, source, queued, pending}'
+
+curl -s -X POST localhost:8000/playlist \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"prompt": "post-punk británico de 1980", "n_tracks": 20, "play_now": false}' \
+  | jq '{source, verificacion}'
+
+capacidad del disco rasp
+df -h / 
+
+restart rasp
+systemctl --user restart media-api
+
+
+
+
+

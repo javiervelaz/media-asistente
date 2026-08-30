@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -16,6 +17,10 @@ CLIENT = os.environ.get("YT_PLAYER_CLIENT", "mweb")
 POT = os.environ["POT_PROVIDER_URL"]
 CACHE = Path(os.environ["TRACK_CACHE_DIR"])
 MAX_BYTES = int(os.environ.get("TRACK_CACHE_GB", "4")) * 1024**3
+# Piso de espacio libre real del filesystem, no solo del tamaño del cache:
+# el disco se puede llenar por algo ajeno (logs, Postgres local, el SO) y
+# ahí MAX_BYTES por sí solo no garantiza que quede lugar para bajar algo.
+MIN_FREE_BYTES = int(os.environ.get("TRACK_CACHE_MIN_FREE_MB", "500")) * 1024**2
 
 AUDIO_CACHE = CACHE / "audio"
 VIDEO_CACHE = CACHE / "video"
@@ -76,6 +81,13 @@ async def _descargar(yid: str, dest_dir: Path, formato: str,
         if ya:
             return ya
 
+        # Purga preventiva ANTES de intentar bajar. Antes _purgar() solo se
+        # disparaba después de una descarga exitosa: con el disco ya lleno
+        # eso es un círculo cerrado (hace falta espacio para bajar algo, pero
+        # hace falta bajar algo con éxito para liberar espacio) y el sistema
+        # no se recupera solo.
+        await asyncio.to_thread(_purgar)
+
         salida = dest_dir / f".{yid}.part.%(ext)s"
         proc = await asyncio.create_subprocess_exec(
             YTDLP, "--js-runtimes", RUNTIME,
@@ -118,13 +130,29 @@ def _limpiar(dest_dir: Path, yid: str) -> None:
 
 
 def _purgar() -> None:
-    """LRU por atime sobre ambos caches."""
+    """LRU por atime sobre ambos caches.
+
+    Dos condiciones de corte, no una: el tamaño del cache contra MAX_BYTES
+    (como antes) y el espacio libre real del filesystem contra
+    MIN_FREE_BYTES. La primera no alcanza si el disco se llena por algo que
+    no es el cache — ahí el cache puede estar "sano" según su propio límite
+    y el disco de todas formas no tener lugar para una descarga nueva.
+    """
     files = [p for d in (AUDIO_CACHE, VIDEO_CACHE)
              for p in d.iterdir()
              if p.is_file() and not p.name.startswith(".")]
     files.sort(key=lambda p: p.stat().st_atime)
     total = sum(f.stat().st_size for f in files)
-    while total > MAX_BYTES and files:
+
+    def _falta_purgar() -> bool:
+        if total > MAX_BYTES:
+            return True
+        try:
+            return shutil.disk_usage(CACHE).free < MIN_FREE_BYTES
+        except OSError:
+            return False
+
+    while files and _falta_purgar():
         f = files.pop(0)
         total -= f.stat().st_size
         f.unlink(missing_ok=True)

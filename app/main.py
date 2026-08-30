@@ -28,7 +28,7 @@ from app.history import (
     set_current,
 )
 from app.llm import generate_playlist
-from app.music import mark_failed, resolve_tracks
+from app.music import mark_failed, resolve_track, resolve_tracks
 from app.player import MPVError
 
 logging.basicConfig(
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Media Asistente", version="0.4.0", lifespan=lifespan)
 
-ARRANQUE = 1   # tracks a resolver antes de devolver respuesta
+MAX_INTENTOS_CABEZA = 6   # candidatos que se caminan buscando uno que arranque
 
 
 # === Modelos ===
@@ -156,53 +156,125 @@ async def _fade_in(target: int, seconds: int = 30, steps: int = 30):
 
 # === Descarga + encolado ===
 
-async def _bajar(t: dict) -> "str | None":
-    """Baja el archivo y lo registra para el observador. None si falla."""
+async def _bajar(t: dict) -> "tuple[str | None, str | None]":
+    """Baja el archivo y lo registra para el observador.
+    Devuelve (path, motivo): path es None si falla, y motivo trae el detalle
+    real de la excepción (disco lleno, 403, timeout, POT caído...) para que
+    quien llama pueda discriminar la causa en vez de recibir solo None."""
     yid = t.get("youtube_id")
     if not yid:
         logger.error("track sin youtube_id: %s - %s", t.get("artist"), t.get("title"))
-        return None
+        return None, "sin_youtube_id"
     try:
         path = await tracks.obtener_track(yid)
     except tracks.TrackNoDisponible as e:
         logger.error("no se pudo bajar %s - %s: %s", t["artist"], t["title"], e)
         await mark_failed(yid, str(e))
-        return None
+        return None, str(e)
     player.registrar_track(path, yid)
-    return str(path)
+    return str(path), None
 
 
 async def _encolar(t: dict) -> bool:
-    path = await _bajar(t)
+    path, _ = await _bajar(t)
     if not path:
         return False
     await player.enqueue_path(path)
     return True
 
 
-async def _start_playback(cabeza: list, fade: bool) -> list:
-    """Baja el primero, arranca, y encola el resto de la cabeza.
-    Devuelve los tracks que realmente entraron a la cola."""
-    primero = None
-    idx = 0
-    for idx, t in enumerate(cabeza):
-        primero = await _bajar(t)
-        if primero:
-            break
-    if not primero:
-        raise HTTPException(404, "ningún track de la cabeza se pudo descargar")
+def _clasificar_motivo(msg: "str | None") -> str:
+    """Bucketiza el texto crudo de la falla para el detalle del 404.
+    Aproximado (yt-dlp no da un código de error estructurado), pero alcanza
+    para distinguir 'se llenó el disco' de '403' de 'no hay match'."""
+    if not msg:
+        return "descarga_fallida"
+    m = msg.lower()
+    if "no space" in m or "enospc" in m or "espacio" in m:
+        return "disco_lleno"
+    if "403" in m or "forbidden" in m:
+        return "ytdlp_403"
+    if "timeout" in m or "timed out" in m:
+        return "timeout"
+    if "pot" in m or "sabr" in m:
+        return "pot_provider"
+    if m == "sin_youtube_id":
+        return "sin_youtube_id"
+    return "descarga_fallida"
 
+
+async def _resolver_cabeza(propuestos: list[dict], descargar: bool,
+                           max_intentos: int = MAX_INTENTOS_CABEZA):
+    """Camina `propuestos` hasta encontrar uno que resuelva (y, si
+    `descargar`, que además baje). El primero que arranca manda.
+
+    Antes bastaba con que el primer candidato fallara -- por lo que sea, sin
+    match en YouTube, disco lleno, 403 -- para tirar 404 aunque hubiera 20
+    tracks viables detrás. Los saltados no se descartan: vuelven al frente
+    de la cola de background (`resto`) para reintento; un track que falló
+    por un timeout de red no está roto para siempre.
+
+    Devuelve (track_resuelto, path, resto, motivos). Si nada sirvió,
+    track_resuelto y path son None y `resto` trae todo lo saltado.
+    """
+    motivos: dict[str, int] = {}
+    saltados: list[dict] = []
+
+    for i, t in enumerate(propuestos[:max_intentos]):
+        try:
+            resuelto = await resolve_track(
+                t["artist"], t["title"],
+                recording_mbid=t.get("recording_mbid"),
+                expected_ms=t.get("length_ms"),
+            )
+        except Exception:
+            logger.warning("cabeza: error resolviendo %s - %s",
+                           t.get("artist"), t.get("title"), exc_info=True)
+            motivos["error_resolucion"] = motivos.get("error_resolucion", 0) + 1
+            saltados.append(t)
+            continue
+
+        if not resuelto:
+            motivos["sin_match"] = motivos.get("sin_match", 0) + 1
+            saltados.append(t)
+            continue
+
+        resuelto.pop("cached", None)
+        candidato = {**t, **resuelto}
+
+        if not descargar:
+            return candidato, None, saltados + propuestos[i + 1:], motivos
+
+        try:
+            path, motivo_falla = await _bajar(candidato)
+        except Exception:
+            logger.warning("cabeza: excepción bajando %s - %s",
+                           t.get("artist"), t.get("title"), exc_info=True)
+            motivos["error_descarga"] = motivos.get("error_descarga", 0) + 1
+            saltados.append(t)
+            continue
+
+        if not path:
+            clave = _clasificar_motivo(motivo_falla)
+            motivos[clave] = motivos.get(clave, 0) + 1
+            saltados.append(t)
+            continue
+
+        return candidato, path, saltados + propuestos[i + 1:], motivos
+
+    return None, None, saltados, motivos
+
+
+async def _start_playback(primero_track: dict, primero_path: str,
+                          fade: bool) -> list:
+    """El primer track ya está resuelto y bajado (lo hizo _resolver_cabeza).
+    Solo prepara mpv y arranca."""
     await player.clear_playlist()
     await player.set_video(False)          # música = sin video
     if fade:
         await player.set_volume(0)         # silencio antes del primer track
-    await player.play_path(primero, replace=True)
-
-    encolados = [cabeza[idx]]
-    for t in cabeza[idx + 1:]:
-        if await _encolar(t):
-            encolados.append(t)
-    return encolados
+    await player.play_path(primero_path, replace=True)
+    return [primero_track]
 
 
 # === Persistencia del historial ===
@@ -300,16 +372,21 @@ async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
     except Exception:
         logger.exception("no pude registrar la playlist (sigo igual)")
 
-    cabeza = await resolve_tracks(propuestos[:ARRANQUE])
-    if not cabeza:
-        raise HTTPException(404, "No track could be resolved on YouTube")
+    cabeza_track, primero_path, resto, motivos = await _resolver_cabeza(
+        propuestos, descargar=play_now)
+    if not cabeza_track:
+        raise HTTPException(404, detail={
+            "error": "ningún track de la cabeza se pudo resolver ni descargar",
+            "intentados": min(len(propuestos), MAX_INTENTOS_CABEZA),
+            "motivos": motivos,
+        })
 
-    encolados = cabeza
+    encolados = [cabeza_track]
     if play_now:
         _cancel_fade()
         _cancel_resto()
         try:
-            encolados = await _start_playback(cabeza, fade)
+            encolados = await _start_playback(cabeza_track, primero_path, fade)
         except MPVError as e:
             raise HTTPException(503, f"Player not available: {e}")
 
@@ -319,7 +396,7 @@ async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
         set_current(playlist_id, encolados)
         _fire(_log_history(encolados, room_id, playlist_id, offset=0))
         if resolver_resto:
-            _set_resto(_resolver_resto(propuestos[ARRANQUE:], playlist_id,
+            _set_resto(_resolver_resto(resto, playlist_id,
                                        room_id, offset=len(encolados)))
 
     return {
@@ -327,10 +404,11 @@ async def _lanzar(propuestos: list[dict], titulo: str, room_id: str = "main",
         "title": titulo,
         "source": source,
         "queued": len(encolados),
-        "pending": max(0, len(propuestos) - ARRANQUE),
+        "pending": len(resto),
         "first_track": encolados[0],
         "tracks": encolados,
         "proposed": propuestos,
+        "resto_no_intentado": resto,
         "faded": fade and play_now,
     }
 
@@ -384,7 +462,7 @@ async def create_playlist(req: PlaylistRequest):
             if req.play_now:
                 _set_resto(_completar_cola_hybrid(
                     uuid.UUID(resp["playlist_id"]), req.prompt,
-                    locales_pendientes=cabeza[ARRANQUE:],
+                    locales_pendientes=resp["resto_no_intentado"],
                     ya_sonando=resp["tracks"],
                     n_tracks=req.n_tracks, room_id=req.room_id,
                     offset=resp["queued"],
