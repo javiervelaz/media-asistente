@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     # Proporcion maxima de tracks sin respaldo en un tool result (0..1).
     # 1.0 = solo medir, no recortar. 0.0 = estricto, solo verificados.
     curator_max_libres: float = 0.2
+    # --- harness conversacional ---
+    # Que hacer con un turno que el router no entiende. True = va al
+    # curador, que es lo que hace hoy el bot de Telegram con todo texto
+    # libre. Queda logueado en turn_log con model=curator, asi que el
+    # costo del fallback deja de ser invisible. Ponelo en False cuando
+    # la etapa 1 cubra lo suficiente como para que repreguntar salga
+    # mas barato que adivinar.
+    harness_fallback_playlist: bool = True
+    harness_n_tracks: int = 14
+
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 
 

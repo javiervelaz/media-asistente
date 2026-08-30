@@ -282,7 +282,11 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8) -> dict:
         if resp.stop_reason != "tool_use":
             logger.info("tokens — in:%(in)d out:%(out)d "
                         "cache_r:%(cache_read)d cache_w:%(cache_write)d", uso)
-            return _parse(resp, vistos, n_tracks)
+            data = _parse(resp, vistos, n_tracks)
+            # El harness lo escribe en turn_log: sin esto, el costo
+            # de un turno de curacion solo existe en los logs.
+            data["usage"] = uso
+            return data
 
         resultados = []
         for block in resp.content:

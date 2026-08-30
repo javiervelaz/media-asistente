@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 from app import local_search, player, tracks
 from app.auth import verify_api_key
+from app.harness import executors as harness_exec
+from app.harness.chat import responder as harness_responder
 from app.config import settings
 from app.curator import curate
 from app.db import (
@@ -42,6 +44,10 @@ logger = logging.getLogger("media-asistente")
 async def lifespan(app: FastAPI):
     await init_pool()
     player.iniciar_observador(on_fail=mark_failed, on_eof=register_complete)
+    # El harness reusa los cancelables sin importar main (ciclo).
+    harness_exec.set_hooks(cancel_fade=_cancel_fade,
+                           cancel_resto=_cancel_resto,
+                           crear_playlist=_harness_playlist)
     yield
     await close_pool()
 
@@ -80,6 +86,12 @@ class PromptRequest(BaseModel):
 class VolumeRequest(BaseModel):
     level: int | None = None    # absoluto
     delta: int | None = None    # relativo: +10 / -10
+
+
+class ChatRequest(BaseModel):
+    text: str
+    session_id: str = "anon"
+    room_id: str = "main"
 
 
 class VideoRequest(BaseModel):
@@ -475,6 +487,7 @@ async def create_playlist(req: PlaylistRequest):
                     if req.use_curator is None else req.use_curator)
     concept = narration = ""
     metricas = None
+    uso_llm = None
 
     if usar_curador:
         try:
@@ -482,6 +495,7 @@ async def create_playlist(req: PlaylistRequest):
             concept = data.get("concept", "")
             narration = data.get("narration", "")
             metricas = data.get("metrics")
+            uso_llm = data.get("usage")
         except Exception:
             logger.exception("curador falló, cayendo al generador simple")
             data = await asyncio.to_thread(generate_playlist, req.prompt)
@@ -500,6 +514,8 @@ async def create_playlist(req: PlaylistRequest):
         fade=req.fade, fade_target=req.fade_target,
         fade_seconds=req.fade_seconds,
     )
+
+    resp["usage"] = uso_llm
 
     logger.info("timing — curador:%.1fs resto:%.1fs total:%.1fs",
                 t_cur - t0, time.monotonic() - t_cur, time.monotonic() - t0)
@@ -722,6 +738,34 @@ async def despertador(req: DespertadorRequest):
     resp["concept"] = concepto
     resp["narration"] = ""
     return resp
+
+
+# === Harness conversacional ===
+
+async def _harness_playlist(prompt: str, room_id: str = "main") -> dict:
+    """Adaptador para que el harness reuse /playlist sin duplicar ruteo.
+
+    Menos tracks que por API: en una conversacion la cola larga se vuelve
+    ruido y cada track de mas es una descarga en un Pi 3B.
+    """
+    return await create_playlist(PlaylistRequest(
+        prompt=prompt, room_id=room_id,
+        n_tracks=settings.harness_n_tracks))
+
+
+
+@app.post("/chat", dependencies=[Depends(verify_api_key)])
+async def chat(req: ChatRequest):
+    """Un turno de conversacion. El transporte (n8n/Telegram) manda el texto
+    crudo y no sabe nada de intents; el harness no sabe nada de Telegram.
+
+    Determinista primero: hoy el 100% de los turnos que resuelve son gratis.
+    `free: false` en la respuesta es la senal de que un turno gasto tokens.
+    """
+    texto = (req.text or "").strip()
+    if not texto:
+        raise HTTPException(400, "mandá 'text'")
+    return await harness_responder(texto, req.session_id, req.room_id)
 
 
 # === Controles ===

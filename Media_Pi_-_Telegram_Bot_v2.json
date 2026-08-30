@@ -1,5 +1,5 @@
 {
-  "name": "Media Pi - Telegram Bot",
+  "name": "Media Pi - Telegram Bot v2 (harness)",
   "nodes": [
     {
       "parameters": {
@@ -203,72 +203,7 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=https://media.countercrm.com/playlist",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-API-Key",
-              "value": "=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
-            },
-            {
-              "name": "CF-Access-Client-Id",
-              "value": "=7ea9bcebbc6770d53b415c9365c01093.access"
-            },
-            {
-              "name": "CF-Access-Client-Secret",
-              "value": "=f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"prompt\": \"{{ $('Telegram Trigger').item.json.message.text.replace(/\"/g, '\\\\\"') }}\",\n  \"n_tracks\": 20,\n  \"room_id\": \"telegram\"\n}",
-        "options": {
-          "timeout": 400000
-        }
-      },
-      "id": "43561921-3b84-4b33-9cb8-0d466040c32a",
-      "name": "Create Playlist",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        0,
-        0
-      ]
-    },
-    {
-      "parameters": {
-        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
-        "text": "=✅ *{{ $json.title }}*\n\n_{{ $json.concept }}_\n\n_{{ $json.narracion }}_\n\n🎵 Sonando: {{ $json.first_track.artist }} - {{ $json.first_track.title }}\n💿 Cola: {{ $json.queued + $json.pending }} tracks",
-        "additionalFields": {
-          "parse_mode": "Markdown"
-        }
-      },
-      "id": "8b76f124-2352-45b6-8a07-cca0dddd48ca",
-      "name": "Reply Playlist Created",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [
-        224,
-        0
-      ],
-      "webhookId": "73e359ec-fe11-416b-a321-a3748b9292e3",
-      "credentials": {
-        "telegramApi": {
-          "id": "LLNVpI5vFckdK2cB",
-          "name": "Telegram account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// Mapear callback_data o /comando a endpoint y método de la API\nconst input = $input.item.json;\n\nconst raw = input.callback_query?.data\n         ?? input.message?.text?.replace(/^\\//, '').split(' ')[0];\n\nconst commandMap = {\n  play:     { path: '/control/play',   method: 'POST', body: null },\n  pause:    { path: '/control/pause',  method: 'POST', body: null },\n  next:     { path: '/control/next',   method: 'POST', body: null },\n  prev:     { path: '/control/prev',   method: 'POST', body: null },\n  stop:     { path: '/control/stop',   method: 'POST', body: null },\n  status:   { path: '/status',         method: 'GET',  body: null },\n  vol_up:   { path: '/control/volume', method: 'POST', body: { delta: 10 } },\n  vol_down: { path: '/control/volume', method: 'POST', body: { delta: -10 } },\n};\n\nlet action = null;\nlet is_replay = false;\n\n// Botón del menú de /repetir: \"replay:<uuid>\"\nif (raw && raw.startsWith('replay:')) {\n  const id = raw.split(':')[1];\n  if (/^[0-9a-f-]{36}$/i.test(id)) {\n    action = { path: `/playlist/${id}/replay?sin_skips=true`, method: 'POST', body: null };\n    is_replay = true;\n  }\n} else {\n  action = commandMap[raw];\n}\n\nif (!action) {\n  return { json: { error: `Comando no reconocido: ${raw}`, command: raw } };\n}\n\nreturn {\n  json: {\n    command: raw,\n    is_replay,\n    path: action.path,\n    method: action.method,\n    body: action.body,\n    chat_id: input.message?.chat?.id ?? input.callback_query?.message?.chat?.id,\n    callback_query_id: input.callback_query?.id ?? null,\n  }\n};"
+        "jsCode": "// Mapear callback_data o /comando a endpoint y método de la API\nconst input = $input.item.json;\n\nconst raw = input.callback_query?.data\n         ?? input.message?.text?.replace(/^\\//, '').split(' ')[0];\n\nconst commandMap = {\n  play:     { path: '/control/play',   method: 'POST', body: null },\n  pause:    { path: '/control/pause',  method: 'POST', body: null },\n  next:     { path: '/control/next',   method: 'POST', body: null },\n  prev:     { path: '/control/prev',   method: 'POST', body: null },\n  stop:     { path: '/control/stop',   method: 'POST', body: null },\n  status:   { path: '/status',         method: 'GET',  body: null },\n  vol_up:   { path: '/control/volume', method: 'POST', body: { delta: 10 } },\n  vol_down: { path: '/control/volume', method: 'POST', body: { delta: -10 } },\n};\n\nlet action = null;\nlet is_replay = false;\n\n// Botón del menú de /repetir: \"replay:<uuid>\"\nif (raw && raw.startsWith('replay:')) {\n  const id = raw.split(':')[1];\n  if (/^[0-9a-f-]{36}$/i.test(id)) {\n    action = { path: `/playlist/${id}/replay?sin_skips=true`, method: 'POST', body: null };\n    is_replay = true;\n  }\n} else {\n  action = commandMap[raw];\n}\n\nif (!action) {\n  return { json: { error: `Comando no reconocido: ${raw}`, command: raw } };\n}\n\nreturn {\n  json: {\n    command: raw,\n    is_replay,\n    path: action.path,\n    method: action.method,\n    body: action.body || {},\n    chat_id: input.message?.chat?.id ?? input.callback_query?.message?.chat?.id,\n    callback_query_id: input.callback_query?.id ?? null,\n  }\n};"
       },
       "id": "8ab2f3c1-177e-4ef6-b248-705861220487",
       "name": "Map Command to API",
@@ -288,15 +223,15 @@
           "parameters": [
             {
               "name": "X-API-Key",
-              "value": "=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+              "value": "={{ $env.MEDIA_API_KEY }}"
             },
             {
               "name": "CF-Access-Client-Id",
-              "value": "=7ea9bcebbc6770d53b415c9365c01093.access"
+              "value": "={{ $env.CF_ACCESS_CLIENT_ID }}"
             },
             {
               "name": "CF-Access-Client-Secret",
-              "value": "=f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+              "value": "={{ $env.CF_ACCESS_CLIENT_SECRET }}"
             },
             {
               "name": "Content-Type",
@@ -306,7 +241,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "jsonBody": "={{ JSON.stringify($json.body || {}) }}",
         "options": {
           "timeout": 45000
         }
@@ -368,7 +303,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.item.json;\nconst text = (input.message?.text || \"\").trim();\nconst chatId = input.message?.chat?.id;\nconst parts = text.split(/\\s+/);\nconst arg = (parts[1] || \"\").toLowerCase();\n\nlet action, time = null, reply_invalid = null;\nif (!arg) {\n  action = 'status';\n} else if (arg === 'off' || arg === 'apagar') {\n  action = 'off';\n} else if (/^([01]\\d|2[0-3]):([0-5]\\d)$/.test(arg)) {\n  action = 'set'; time = arg;\n} else {\n  action = 'invalid';\n  reply_invalid = 'Formato invalido. Usa: /despertador HH:MM (ej 07:30) o /despertador off';\n}\n\nlet sql;\nif (action === 'set') {\n  sql = `UPDATE alarm_config SET time='${time}', enabled=true, updated_at=now() WHERE id=1 RETURNING time, enabled;`;\n} else if (action === 'off') {\n  sql = `UPDATE alarm_config SET enabled=false, updated_at=now() WHERE id=1 RETURNING time, enabled;`;\n} else {\n  sql = `SELECT time, enabled FROM alarm_config WHERE id=1;`;\n}\n\nreturn { json: { action, time, chatId, sql, reply_invalid } };"
+        "jsCode": "const input = $input.item.json;\nconst text = (input.message?.text || \"\").trim();\nconst chatId = input.message?.chat?.id;\nconst parts = text.split(/\\s+/);\nconst arg = (parts[1] || \"\").toLowerCase();\n\nlet action, time = null, reply_invalid = null;\nif (!arg) {\n  action = 'status';\n} else if (arg === 'off' || arg === 'apagar') {\n  action = 'off';\n} else if (/^([01]\\d|2[0-3]):([0-5]\\d)$/.test(arg)) {\n  action = 'set'; time = arg;\n} else {\n  action = 'invalid';\n  reply_invalid = 'Formato invalido. Usa: /despertador HH:MM (ej 07:30) o /despertador off';\n}\n\nlet sql;\nif (action === 'set') {\n  sql = `UPDATE alarm_config SET alarm_time='${time}', enabled=true, updated_at=now() WHERE id=1 RETURNING alarm_time, enabled;`;\n} else if (action === 'off') {\n  sql = `UPDATE alarm_config SET enabled=false, updated_at=now() WHERE id=1 RETURNING alarm_time, enabled;`;\n} else {\n  sql = `SELECT alarm_time, enabled FROM alarm_config WHERE id=1;`;\n}\n\nreturn { json: { action, time, chatId, sql, reply_invalid } };"
       },
       "id": "80082329-bf9d-4e03-a89d-c539132a7f3d",
       "name": "Parsear despertador",
@@ -443,15 +378,19 @@
           "parameters": [
             {
               "name": "X-API-Key",
-              "value": "kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+              "value": "={{ $env.MEDIA_API_KEY }}"
             },
             {
               "name": "CF-Access-Client-Id",
-              "value": "7ea9bcebbc6770d53b415c9365c01093.access"
+              "value": "={{ $env.CF_ACCESS_CLIENT_ID }}"
             },
             {
               "name": "CF-Access-Client-Secret",
-              "value": "f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+              "value": "={{ $env.CF_ACCESS_CLIENT_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
         },
@@ -484,7 +423,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"chat_id\": \"{{ $('Telegram Trigger').item.json.message.chat.id }}\",\n  \"text\": \"{{ $json.texto }}\",\n  \"reply_markup\": {{ $json.payload }}\n}",
@@ -504,7 +443,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/answerCallbackQuery",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"callback_query_id\": \"{{ $json.callback_query_id }}\",\n  \"text\": \"{{ $json.is_replay ? 'Arrancando…' : '' }}\"\n}",
@@ -525,21 +464,21 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://media.countercrm.com/despertador",
+        "url": "=https://media.countercrm.com/chat",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "X-API-Key",
-              "value": "=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo"
+              "value": "={{ $env.MEDIA_API_KEY }}"
             },
             {
               "name": "CF-Access-Client-Id",
-              "value": "=7ea9bcebbc6770d53b415c9365c01093.access"
+              "value": "={{ $env.CF_ACCESS_CLIENT_ID }}"
             },
             {
               "name": "CF-Access-Client-Secret",
-              "value": "=f9443915de0beb23e36a869e399f5623a463cc009feb7c286d8ab8b1b398b71a"
+              "value": "={{ $env.CF_ACCESS_CLIENT_SECRET }}"
             },
             {
               "name": "Content-Type",
@@ -549,37 +488,36 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "=🌅 *{{ $json.title }}*\n\n_{{ $json.concept }}_\n\n{{ $json.narration }}\n\n🎵 {{ $json.first_track.artist }} — {{ $json.first_track.title }}\n💿 {{ $json.queued }} listos, {{ $json.pending }} en camino",
+        "jsonBody": "={{ JSON.stringify({ text: $('Telegram Trigger').item.json.message.text, session_id: 'tg:' + $('Telegram Trigger').item.json.message.chat.id, room_id: 'telegram' }) }}",
         "options": {
-          "timeout": 120000
+          "timeout": 400000
         }
       },
-      "id": "5a32ef00-d756-4f93-980c-d1817d3c8441",
-      "name": "Create Playlist1",
+      "id": "harness-chat-node",
+      "name": "Chat a la API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -736,
-        496
+        0,
+        0
       ]
     },
     {
       "parameters": {
         "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
-        "text": "=✅ *{{ $json.title }}*\n\n_{{ $json.concept }}_\n\n_{{ $json.narracion }}_\n\n🎵 Sonando: {{ $json.first_track.artist }} - {{ $json.first_track.title }}\n💿 Cola: {{ $json.queued + $json.pending }} tracks",
+        "text": "={{ $json.reply }}{{ $json.free ? '' : '\\n\\n_· ' + $json.intent + ' · ' + $json.stage + ' · ' + $json.cost_tokens + ' tokens_' }}",
         "additionalFields": {
           "parse_mode": "Markdown"
         }
       },
-      "id": "97dc15e6-928b-47c6-a7cb-70a09615dd6a",
-      "name": "Reply Playlist Created1",
+      "id": "harness-reply-node",
+      "name": "Reply Chat",
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        -448,
-        512
+        224,
+        0
       ],
-      "webhookId": "73e359ec-fe11-416b-a321-a3748b9292e3",
       "credentials": {
         "telegramApi": {
           "id": "LLNVpI5vFckdK2cB",
@@ -644,7 +582,7 @@
         ],
         [
           {
-            "node": "Create Playlist",
+            "node": "Chat a la API",
             "type": "main",
             "index": 0
           }
@@ -652,17 +590,6 @@
         [
           {
             "node": "Reply Unsupported",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Create Playlist": {
-      "main": [
-        [
-          {
-            "node": "Reply Playlist Created",
             "type": "main",
             "index": 0
           }
@@ -751,11 +678,11 @@
         ]
       ]
     },
-    "Create Playlist1": {
+    "Chat a la API": {
       "main": [
         [
           {
-            "node": "Reply Playlist Created1",
+            "node": "Reply Chat",
             "type": "main",
             "index": 0
           }

@@ -127,6 +127,12 @@ async def prev_track() -> None:
     await _cmd(["playlist-prev"])
 
 
+async def restart_track() -> None:
+    """Vuelve al principio del tema actual sin recargarlo."""
+    await _cmd(["seek", 0, "absolute"])
+    await _cmd(["set_property", "pause", False])
+
+
 async def set_volume(level: int) -> None:
     level = max(0, min(100, level))
     await _cmd(["set_property", "volume", level])
