@@ -61,7 +61,7 @@ telemetry.log_turn = lambda **kw: ESCRITO.append(kw)
 chat.log_turn = telemetry.log_turn
 
 # --- H2: la base falsa -----------------------------------------------------
-from app.harness import queries, executors as _ex
+from app.harness import queries, executors as _ex, chat as _chat
 from datetime import datetime, timedelta, timezone
 
 _HOY = [
@@ -80,11 +80,13 @@ async def _q_top(dias=30): return [
 async def _q_salteados(dias=90): return [
     {"artist": "Los Mirlos", "skips": 4, "temas": 3}]
 async def _q_nunca(limite=15): return [
-    {"artist": "Sumo", "album": "Divididos por la Felicidad", "anio": "1985"},
-    {"artist": "Virus", "album": "Locura", "anio": "1985"}]
+    {"mbid": "22222222-0000-0000-0000-000000000000", "artist": "Sumo",
+     "album": "Divididos por la Felicidad", "anio": "1985"},
+    {"mbid": "33333333-0000-0000-0000-000000000000", "artist": "Virus",
+     "album": "Locura", "anio": "1985"}]
 async def _q_efem(limite=8): return [
-    {"artist": "Joy Division", "album": "Closer", "anio": "1980",
-     "aniversario": 46, "weight": 1}]
+    {"mbid": "11111111-0000-0000-0000-000000000000", "artist": "Joy Division",
+     "album": "Closer", "anio": "1980", "aniversario": 46, "weight": 1}]
 async def _q_artista(nombre):
     return {"mbid": "aaaaaaaa-0000-0000-0000-000000000000", "name": "Wire",
             "sim": 0.9} if "wire" in nombre.lower() else None
@@ -97,6 +99,13 @@ async def _q_rel(mbid, limite=15): return [
 async def _q_hist_art(mbid, nombre, dias=90): return [
     {"title": "Reuters", "veces": 4, "completos": 3, "skips": 1,
      "ultima": datetime.now(timezone.utc)}]
+async def _q_costo(): return 19300
+async def _q_de_releases(mbids, limite=14, por_album=3):
+    LLAMADAS.append(("tracks_de_releases", tuple(mbids)))
+    return [{"recording_mbid": "d1", "artist": "Joy Division",
+             "title": "Isolation", "album": "Closer", "listo": True},
+            {"recording_mbid": "d2", "artist": "Joy Division",
+             "title": "Passover", "album": "Closer", "listo": True}]
 async def _q_tracks(v, limite=14): return [
     {"recording_mbid": "bbbb", "artist": "Wire", "title": "Reuters",
      "youtube_id": "x1"},
@@ -108,9 +117,12 @@ for nombre, fn in [("historial_periodo", _q_historial), ("top_escuchados", _q_to
                    ("efemerides_hoy", _q_efem), ("resolver_artista", _q_artista),
                    ("discografia", _q_disco), ("relaciones", _q_rel),
                    ("historial_artista", _q_hist_art),
-                   ("tracks_del_periodo", _q_tracks)]:
+                   ("tracks_del_periodo", _q_tracks),
+                   ("tracks_de_releases", _q_de_releases),
+                   ("costo_tipico", _q_costo)]:
     setattr(queries, nombre, fn)
 _ex.queries = queries
+_chat.queries = queries
 
 async def fake_lanzar(tracks_, titulo, room_id="main"):
     LLAMADAS.append(("lanzar", titulo, len(tracks_)))
@@ -136,7 +148,17 @@ async def main():
               "qué discos tengo de Wire", "quién tocó con Wire",
               "qué escuché de Wire", "qué discos tengo de Pescado Rabioso",
               "poneme algo que haya escuchado hoy",
+              # la oferta y su confirmacion: dos turnos, cero tokens
+              "efemérides", "dale",
+              "qué tengo en vinilo sin escuchar", "no",
               # --- lo unico que gasta ---
+              # infinitivos: "parar" no matcheaba y caia al fallback
+              "parar", "seguir",
+              # el freno de gasto: lo no entendido avisa antes de pagar
+              "ese temita que sonaba en el bar", "no",
+              # y ahora aceptando: el gasto queda atribuido al turno del "dale"
+              "algo raro que no entiendo", "dale",
+              # un pedido explicito no pide permiso
               "armá una playlist de post-punk británico de 1980"]
     print("=" * 66)
     for f in frases:
@@ -154,8 +176,20 @@ async def main():
     for e in caros:
         print(f"  gasto: {e['intent']} (stage={e['stage']}) "
               f"in={e['input_tokens']} cache={e['cached_tokens']} out={e['output_tokens']}")
-    assert gratis == len(ESCRITO) - 1, (gratis, len(ESCRITO))
+    assert gratis == len(ESCRITO) - 2, (gratis, len(ESCRITO))
+    frenados = [e for e in ESCRITO if e["intent"] == "confirmar_gasto"]
+    assert len(frenados) == 2, frenados
+    assert all(f["model"] is None for f in frenados), "el freno no puede costar"
+    # el "dale" que acepta ejecuta la playlist y ESE turno es el que paga
+    conf = [e for e in ESCRITO if e["intent"] == "confirmar"]
+    assert len(conf) == 2, conf
+    pagos = [e for e in conf if e["model"]]
+    assert len(pagos) == 1, f"el dale sobre un freno tiene que quedar como pago: {conf}"
     assert ("lanzar", "De nuevo: hoy", 2) in LLAMADAS, "reproducir_historial no lanzo"
+    # lo que suena tiene que ser EXACTAMENTE el release listado
+    assert ("tracks_de_releases", ("11111111-0000-0000-0000-000000000000",)) in LLAMADAS, \
+        "el 'dale' no reprodujo los releases que se listaron"
+    assert ("lanzar", "Las efemérides de hoy", 2) in LLAMADAS
     assert ("register_advance", "next") in LLAMADAS, "el skip por chat no se registro"
     assert ESTADO["volume"] == 40
     print("\nOK — el skip por chat registra feedback igual que /control/next")

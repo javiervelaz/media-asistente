@@ -112,9 +112,11 @@ efemérides
 
 *Volver a lo escuchado*
 poneme algo que haya escuchado hoy
+(y cuando te ofrezco algo, alcanza con "dale")
 
 *Música nueva* (esto sí usa el curador)
-decime qué querés: "algo tranqui para cocinar", "cumbia santafesina"."""
+decime qué querés: "algo tranqui para cocinar", "cumbia santafesina".
+Si no te entiendo, te aviso cuánto sale antes de gastar."""
 
 
 def saludo(track: dict | None) -> str:
@@ -216,14 +218,14 @@ def salteados(rows: list[dict], dias: int) -> str:
             "Esto ya pesa en el ranking local: cada skip resta.")
 
 
-def nunca_escuchado(rows: list[dict]) -> str:
+def nunca_escuchado(rows: list[dict], ofrecible: bool = False) -> str:
     if not rows:
         return VACIO["nunca_escuchado"]
     cuerpo = "\n".join(
         f"· {r['artist']} — {r['album']}" + (f" ({r['anio']})" if r["anio"] else "")
         for r in rows[:12])
     return (f"Del estante, sin escuchar entero todavía:\n{cuerpo}"
-            f"{_mas(len(rows), 12)}")
+            f"{_mas(len(rows), 12)}" + (OFRECER if ofrecible else ""))
 
 
 def discografia(rows: list[dict], artista: str) -> str:
@@ -249,7 +251,10 @@ def relaciones(rows: list[dict], artista: str) -> str:
     return f"Vinculado con {artista}:\n{cuerpo}{_mas(len(rows), 12)}"
 
 
-def efemerides_hoy(rows: list[dict]) -> str:
+OFRECER = "\n\n¿Lo pongo? (dale / no)"
+
+
+def efemerides_hoy(rows: list[dict], ofrecible: bool = False) -> str:
     if not rows:
         return VACIO["efemerides_hoy"]
     cuerpo = "\n".join(
@@ -257,7 +262,7 @@ def efemerides_hoy(rows: list[dict]) -> str:
         + (f", {r['aniversario']} años" if r["aniversario"] else "")
         + ")" + ("  ◆" if r["weight"] == 1 else "")
         for r in rows)
-    return f"Un día como hoy:\n{cuerpo}"
+    return f"Un día como hoy:\n{cuerpo}" + (OFRECER if ofrecible else "")
 
 
 def sin_artista(nombre: str) -> str:
@@ -276,3 +281,35 @@ def reproducir_historial(resp: dict, etiqueta: str, n: int) -> str:
 def historial_vacio_para_reproducir(etiqueta: str) -> str:
     return (f"No tengo nada resuelto de {etiqueta} para volver a poner. "
             "Decime qué querés escuchar y lo armo.")
+
+
+def confirmado(resp: dict, etiqueta: str, n: int) -> str:
+    ft = resp.get("first_track") or {}
+    linea = f"Va: {etiqueta} — {n} temas."
+    if ft:
+        linea += f"\nArranca: {ft.get('artist')} — {ft.get('title')}"
+    return linea
+
+
+def sin_oferta_nada_que_poner(etiqueta: str) -> str:
+    return (f"No pude armar la cola de {etiqueta}: esos discos no tienen "
+            "tracklist cargada. Pedime una playlist con alguno y se hidrata.")
+
+
+def rechazado() -> str:
+    return "Listo, no toco nada."
+
+
+def nada_que_confirmar() -> str:
+    return "No te ofrecí nada. Mandá 'ayuda' si querés ver qué manejo."
+
+
+def confirmar_gasto(texto: str, tokens: int, entendido: bool) -> str:
+    """Aviso antes de gastar. El numero sale de turn_log, no de una constante."""
+    aprox = f"~{tokens // 1000}k tokens" if tokens >= 1000 else f"~{tokens} tokens"
+    if entendido:
+        cab = f"Eso lo arma el curador ({aprox})."
+    else:
+        cab = (f"No entendí \"{texto}\" como comando. Puedo mandárselo al "
+               f"curador y que arme una playlist, pero eso gasta ({aprox}).")
+    return f"{cab}\n¿Lo hago? (dale / no)"

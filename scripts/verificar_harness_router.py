@@ -37,6 +37,13 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("basta",                       "control_stop", {}),
     ("cortala",                     "control_stop", {}),
     ("de nuevo",                    "control_replay", {}),
+    # infinitivos: "parar" caia al fallback y de ahi al curador
+    ("parar",                       "control_pause", {}),
+    ("pausar",                      "control_pause", {}),
+    ("seguir",                      "control_play", {}),
+    ("pasar",                       "control_next", {}),
+    ("subir",                       "control_vol_up", {}),
+    ("bajar",                       "control_vol_down", {}),
     ("repetila",                    "control_replay", {}),
     ("desde el principio",          "control_replay", {}),
 
@@ -108,6 +115,19 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("poneme algo que haya escuchado hoy",       "reproducir_historial", None),
     ("poné algo que escuché ayer",               "reproducir_historial", None),
     ("volvé a poner lo que sonó esta semana",    "reproducir_historial", None),
+
+    # Respuesta a una oferta. "dale" y "ok" antes se los comia el
+    # normalizador —eran "ruido" al principio de una orden— y quedaban en "".
+    ("dale",                        "confirmar", {}),
+    ("dale?",                       "confirmar", {}),
+    ("ok",                          "confirmar", {}),
+    ("sí",                          "confirmar", {}),
+    ("obvio",                       "confirmar", {}),
+    ("ponelo",                      "confirmar", {}),
+    ("de una",                      "confirmar", {}),
+    ("no",                          "rechazar", {}),
+    ("mejor no",                    "rechazar", {}),
+    ("ahora no",                    "rechazar", {}),
 ]
 
 #: Tienen que caer en no_entendido. Un patron que se coma alguna de estas es
@@ -124,7 +144,7 @@ NEGATIVOS: list[str] = [
 
 #: Textos que NO matchean ningun patron y son demasiado cortos como para
 #: mandarlos al curador. Tienen que terminar en `repreguntar`, no en playlist.
-CORTOS: list[str] = ["gracias", "ok", "dale?", "mmm", "asdf", "🎵"]
+CORTOS: list[str] = ["gracias", "mmm", "asdf", "🎵", "aaa"]
 
 
 def _fallback(texto: str) -> str:

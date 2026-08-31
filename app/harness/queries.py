@@ -215,7 +215,7 @@ async def nunca_escuchado(limite: int = LIMITE) -> list[dict]:
     """
     rows = await fetch(
         """
-        SELECT e.artist, e.album, left(e.release_date, 4) AS anio
+        SELECT e.mbid, e.artist, e.album, left(e.release_date, 4) AS anio
         FROM ephemerides e
         WHERE e.weight = 1
           AND NOT EXISTS (
@@ -279,7 +279,7 @@ async def relaciones(artist_mbid, limite: int = LIMITE) -> list[dict]:
 async def efemerides_hoy(limite: int = 8) -> list[dict]:
     rows = await fetch(
         """
-        SELECT artist, album, left(release_date, 4) AS anio,
+        SELECT mbid, artist, album, left(release_date, 4) AS anio,
                (EXTRACT(YEAR FROM CURRENT_DATE)
                 - left(release_date, 4)::int) AS aniversario,
                weight
@@ -320,3 +320,83 @@ async def tracks_del_periodo(v: Ventana, limite: int = 14) -> list[dict]:
         LIMIT $3
         """, v.desde, v.hasta, limite)
     return [dict(r) for r in rows]
+
+
+async def tracks_de_releases(mbids: list[str], limite: int = 14,
+                             por_album: int = 3) -> list[dict]:
+    """Tracks de releases concretos, listos para encolar.
+
+    Existe para que lo que se REPRODUCE sea exactamente lo que se LISTO. El
+    `/despertador` usa su propia ventana (±7 dias, solo Album, sin
+    compilations), asi que ofrecer "¿lo pongo?" despues de listar efemerides
+    y despues lanzar el despertador seria mentir: son dos conjuntos distintos.
+
+    Prioriza lo ya resuelto en YouTube (`tr.recording_mbid IS NOT NULL`) sin
+    exigirlo: si un disco del estante nunca sono, igual tiene que poder sonar
+    ahora — solo va a tardar la descarga.
+    """
+    limpios = [m for m in (mbids or []) if m]
+    if not limpios:
+        return []
+    rows = await fetch(
+        """
+        WITH ordenados AS (
+            SELECT rc.mbid::text AS recording_mbid, a.name AS artist,
+                   rc.title, rc.length_ms, r.title AS album,
+                   (tr.recording_mbid IS NOT NULL) AS listo,
+                   row_number() OVER (
+                       PARTITION BY rc.release_mbid
+                       ORDER BY (tr.recording_mbid IS NOT NULL) DESC,
+                                rc.position NULLS LAST
+                   ) AS n
+            FROM recordings rc
+            JOIN releases r ON r.mbid = rc.release_mbid
+            JOIN artists  a ON a.mbid = r.artist_mbid
+            LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+            WHERE rc.release_mbid = ANY($1::uuid[])
+              AND COALESCE(tr.fail_count, 0) < 3
+              AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+        )
+        SELECT recording_mbid, artist, title, length_ms, album, listo
+        FROM ordenados WHERE n <= $2
+        ORDER BY listo DESC, n
+        LIMIT $3
+        """, limpios, por_album, limite)
+    return [dict(r) for r in rows]
+
+
+# --------------------------------------------------- cuanto cuesta un turno
+
+_COSTO_CACHE: dict = {"valor": None, "hasta": None}
+COSTO_DEFAULT = 19_000          # antes de tener datos propios
+COSTO_TTL_MIN = 30
+
+
+async def costo_tipico() -> int:
+    """Tokens de entrada que suele gastar un turno de curador.
+
+    Sale de `turn_log`: el sistema aprende su propio costo en vez de tener un
+    numero magico en el codigo. Cacheado en memoria — es para un mensaje, no
+    vale una consulta por turno.
+    """
+    ahora_ = ahora()
+    if _COSTO_CACHE["hasta"] and ahora_ < _COSTO_CACHE["hasta"]:
+        return _COSTO_CACHE["valor"]
+
+    valor = COSTO_DEFAULT
+    try:
+        row = await fetchrow(
+            """
+            SELECT avg(input_tokens + output_tokens)::int AS prom
+            FROM turn_log
+            WHERE model IS NOT NULL AND input_tokens > 0
+              AND created_at > now() - interval '30 days'
+            """)
+        if row and row["prom"]:
+            valor = int(row["prom"])
+    except Exception:
+        logger.debug("no pude estimar el costo tipico, uso el default")
+
+    _COSTO_CACHE["valor"] = valor
+    _COSTO_CACHE["hasta"] = ahora_ + timedelta(minutes=COSTO_TTL_MIN)
+    return valor

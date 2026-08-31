@@ -38,12 +38,18 @@ def normalizar(text: str) -> str:
     t = _PUNTUACION.sub(" ", t)
     t = _ESPACIOS.sub(" ", t).strip()
     # dos pasadas: "che charly pasala porfa"
+    original = t
     for _ in range(2):
         nuevo = _ESPACIOS.sub(" ", _RUIDO.sub("", t)).strip()
         if nuevo == t:
             break
         t = nuevo
-    return t
+
+    # Si sacar el ruido dejo la frase vacia, el "ruido" ERA el mensaje:
+    # "dale", "ok" y "che" son muletillas al principio de una orden, pero
+    # solas son una respuesta. Sin esto, "dale" se normaliza a "" y no hay
+    # forma de confirmar nada.
+    return t or original
 
 
 # --- patrones ---------------------------------------------------------------
@@ -60,16 +66,18 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"|^volumen\s+(?P<n2>\d{1,3})$")),
 
     ("control_vol_up", re.compile(
-        r"^(?:subi(?:le|la|lo)?|mas fuerte|mas volumen|mas alto|"
-        r"subi el volumen|no se escucha)(?:\s+(?P<n>\d{1,3}))?$")),
+        r"^(?:subi(?:r|le|la|lo)?|mas fuerte|mas volumen|mas alto|"
+        r"subi el volumen|subir volumen|no se escucha)(?:\s+(?P<n>\d{1,3}))?$")),
 
     ("control_vol_down", re.compile(
-        r"^(?:baja(?:le|la|lo)?|baji(?:le|to)|mas bajo|menos volumen|"
-        r"baja el volumen|muy fuerte|esta muy fuerte)(?:\s+(?P<n>\d{1,3}))?$")),
+        r"^(?:baja(?:r|le|la|lo)?|baji(?:le|to)|mas bajo|menos volumen|"
+        r"baja el volumen|bajar volumen|muy fuerte|esta muy fuerte)"
+        r"(?:\s+(?P<n>\d{1,3}))?$")),
 
     ("control_next", re.compile(
-        r"^(?:next|siguiente|pasa(?:la|le|lo)?|otra|otro|cambia(?:la|lo)?|"
-        r"la que sigue|salta(?:la)?|proxima|esta no|no esta)$")),
+        r"^(?:next|siguiente|pasa(?:r|la|le|lo)?|otra|otro|"
+        r"cambia(?:r|la|lo)?|la que sigue|salta(?:r|la)?|saltear|"
+        r"proxima|esta no|no esta)$")),
 
     ("control_prev", re.compile(
         r"^(?:anterior|volve|volve atras|atras|la anterior|"
@@ -80,12 +88,13 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"volve a empezar|de vuelta)$")),
 
     ("control_pause", re.compile(
-        r"^(?:pausa|pausala|para|pare|parala|stop|frena|frenala|"
-        r"silencio|callate|shh+|mute)$")),
+        r"^(?:pausa|pausar|pausala|para|parar|pare|parala|stop|"
+        r"frena|frenar|frenala|silencio|callate|shh+|mute|"
+        r"corta la musica|apaga la musica)$")),
 
     ("control_play", re.compile(
-        r"^(?:segui|seguila|play|reanuda|continua|dale play|"
-        r"volve a poner|arranca|sonido)$")),
+        r"^(?:segui|seguir|seguila|play|reanuda|reanudar|continua|"
+        r"continuar|dale play|arranca|arrancar|sonido)$")),
 
     ("control_stop", re.compile(
         r"^(?:basta|corta(?:la)?|apaga(?:la|lo)?|terminamos|"
@@ -107,6 +116,19 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     ("ayuda", re.compile(
         r"^(?:ayuda|help|que sabes hacer|que podes hacer|comandos|"
         r"opciones|que hago|menu)$")),
+
+    # Respuesta a una oferta ("¿lo pongo?"). Van antes de los controles
+    # porque "dale" es ambiguo: con oferta vigente confirma, sin oferta el
+    # ejecutor lo trata como play. La desambiguacion es por ESTADO, no por
+    # patron — un regex no puede saber si hubo una pregunta antes.
+    ("confirmar", re.compile(
+        r"^(?:dale|si|sisi|si dale|ok|oka|obvio|claro|hacelo|ponelo|"
+        r"pone eso|poneme eso|va|de una|bueno|listo|por que no|"
+        r"me gusta|sale)$")),
+
+    ("rechazar", re.compile(
+        r"^(?:no|nah|no gracias|dejalo|ahora no|mejor no|paso|"
+        r"no por ahora|otra cosa)$")),
 
     # --- H2: lectura de la base. Todo esto era ~19k tokens por turno. ---
     #

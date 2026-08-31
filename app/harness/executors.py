@@ -150,7 +150,11 @@ async def _playlist(intent: Intent, st: SessionState) -> Result:
 
     resp = await _crear_playlist(prompt, st.room_id)
     st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
-    return Result(render.playlist(resp), data=resp, actions=["playlist"])
+    # `gasto` marca el turno como pago para turn_log. No alcanza con mirar el
+    # nombre del intent: por una confirmacion el intent ruteado es `confirmar`,
+    # y no alcanza con los tokens porque la via local devuelve 0 sin usage.
+    return Result(render.playlist(resp), data={**resp, "gasto": True},
+                  actions=["playlist"])
 
 
 async def _saludo(intent, st: SessionState) -> Result:
@@ -235,9 +239,13 @@ async def _salteados(intent, st) -> Result:
     return Result(render.salteados(rows, DIAS_SKIPS), data={"count": len(rows)})
 
 
-async def _nunca_escuchado(intent, st) -> Result:
+async def _nunca_escuchado(intent, st: SessionState) -> Result:
     rows = await queries.nunca_escuchado()
-    return Result(render.nunca_escuchado(rows), data={"count": len(rows)})
+    mbids = [r["mbid"] for r in rows[:6] if r.get("mbid")]
+    if mbids:
+        st.ofrecer("reproducir_releases", "los del estante", mbids=mbids)
+    return Result(render.nunca_escuchado(rows, ofrecible=bool(mbids)),
+                  data={"count": len(rows)})
 
 
 async def _discografia(intent: Intent, st) -> Result:
@@ -260,9 +268,56 @@ async def _relaciones(intent: Intent, st) -> Result:
     return Result(render.relaciones(rows, a["name"]), data={"count": len(rows)})
 
 
-async def _efemerides_hoy(intent, st) -> Result:
+async def _efemerides_hoy(intent, st: SessionState) -> Result:
     rows = await queries.efemerides_hoy()
-    return Result(render.efemerides_hoy(rows), data={"count": len(rows)})
+    mbids = [r["mbid"] for r in rows if r.get("mbid")]
+    if mbids:
+        st.ofrecer("reproducir_releases", "las efemérides de hoy", mbids=mbids)
+    return Result(render.efemerides_hoy(rows, ofrecible=bool(mbids)),
+                  data={"count": len(rows)})
+
+
+async def _reproducir_releases(intent: Intent, st: SessionState) -> Result:
+    """Encola discos concretos. Lo que suena es exactamente lo que se listo.
+
+    No usa /despertador aunque parezca lo mismo: el despertador tiene su
+    propia ventana (±7 dias, solo Album, sin compilations) y devolveria un
+    conjunto distinto del que el usuario acaba de ver en pantalla.
+    """
+    if _lanzar_tracks is None:
+        return Result(render.error("el reproductor no esta enganchado"), ok=False)
+
+    mbids = intent.slots.get("mbids") or []
+    etiqueta = intent.slots.get("etiqueta") or "eso"
+    tracks = await queries.tracks_de_releases(mbids)
+    if not tracks:
+        return Result(render.sin_oferta_nada_que_poner(etiqueta), ok=False)
+
+    resp = await _lanzar_tracks(tracks, etiqueta.capitalize(), st.room_id)
+    st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
+    return Result(render.confirmado(resp, etiqueta, len(tracks)),
+                  data={"count": len(tracks)}, actions=["playlist"])
+
+
+async def _confirmar(intent: Intent, st: SessionState) -> Result:
+    """"dale" es ambiguo y se resuelve por estado, no por patron.
+
+    Con una oferta vigente confirma esa accion; sin oferta es un "seguí"
+    —que es lo que significa "dale" a secas frente a un reproductor pausado.
+    """
+    oferta = st.tomar_oferta()
+    if oferta is None:
+        return await _play(intent, st)
+    return await ejecutar(
+        Intent(name=oferta.intent,
+               slots={**oferta.slots, "etiqueta": oferta.etiqueta},
+               confidence=1.0, stage=intent.stage), st)
+
+
+async def _rechazar(intent, st: SessionState) -> Result:
+    if st.tomar_oferta() is None:
+        return Result(render.nada_que_confirmar(), ok=False)
+    return Result(render.rechazado())
 
 
 async def _reproducir_historial(intent: Intent, st: SessionState) -> Result:
@@ -312,6 +367,9 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "relaciones": _relaciones,
     "efemerides_hoy": _efemerides_hoy,
     "reproducir_historial": _reproducir_historial,
+    "reproducir_releases": _reproducir_releases,
+    "confirmar": _confirmar,
+    "rechazar": _rechazar,
     "no_entendido": _no_entendido,
 }
 

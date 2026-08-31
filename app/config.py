@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # 21:30 de Cordoba ya es manana en UTC y "que escuche hoy" devuelve vacio
     # justo en el horario en que mas se usa el reproductor.
     harness_tz: str = "America/Argentina/Cordoba"
+    # Cuando un turno va a terminar en el curador, avisar el costo y pedir
+    # confirmacion en vez de gastar de una.
+    #   "fallback" (default) — solo cuando el router NO entendio el pedido.
+    #                          Un "arma una playlist de X" explicito es gasto
+    #                          intencional y no necesita permiso.
+    #   "siempre"            — confirma todo lo que gaste.
+    #   "nunca"              — comportamiento historico.
+    harness_confirmar_gasto: str = "fallback"
 
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 

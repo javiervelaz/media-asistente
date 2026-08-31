@@ -6,13 +6,13 @@ loops anidados significan que Sonnet gasta tokens para decidir que hay que
 gastar tokens, y el costo queda repartido entre dos sesiones que no se pueden
 atribuir por separado.
 
-La unica decision de gasto del modulo esta en `_resolver_fallback`, y queda
-escrita en turn_log.
+Las dos unicas decisiones de gasto del modulo estan en `_resolver_fallback` y
+`_freno_de_gasto`, y las dos quedan escritas en turn_log.
 """
 import logging
 
 from app.config import settings
-from app.harness import executors, session
+from app.harness import executors, queries, render, session
 from app.harness.intents import FALLBACK, Intent, Result
 from app.harness.router import normalizar, rutear
 from app.harness.telemetry import Cronometro, log_turn
@@ -45,6 +45,29 @@ def _resolver_fallback(intent: Intent, text: str) -> Intent:
                   confidence=0.0, stage=FALLBACK)
 
 
+async def _freno_de_gasto(intent: Intent, st, text: str) -> Result | None:
+    """Avisa el costo y pide confirmacion antes de llamar al curador.
+
+    Devuelve un Result si hay que frenar; None si el turno sigue de largo.
+
+    El default (`fallback`) frena solo lo que el router NO entendio: un
+    "arma una playlist de post-punk" explicito es gasto intencional y pedirle
+    permiso cada vez seria molesto. Lo que hay que frenar es el gasto que el
+    usuario no pidio — que es exactamente el que no se ve.
+    """
+    modo = settings.harness_confirmar_gasto
+    if intent.name != "playlist" or modo == "nunca":
+        return None
+    entendido = intent.stage != FALLBACK
+    if modo == "fallback" and entendido:
+        return None
+
+    tokens = await queries.costo_tipico()
+    st.ofrecer("playlist", "la playlist", prompt=intent.slots.get("prompt", text))
+    return Result(render.confirmar_gasto(text.strip(), tokens, entendido),
+                  ok=True, data={"frenado": True, "estimado": tokens})
+
+
 def _uso(res: Result) -> dict:
     u = (res.data or {}).get("usage") or {}
     return {
@@ -60,10 +83,19 @@ async def responder(text: str, session_id: str, room_id: str = "main") -> dict:
 
     with Cronometro() as c:
         intent = _resolver_fallback(rutear(text), text)
-        res: Result = await executors.ejecutar(intent, st)
+        freno = await _freno_de_gasto(intent, st, text)
+        if freno is not None:
+            res, intent = freno, Intent(name="confirmar_gasto",
+                                        slots={}, confidence=intent.confidence,
+                                        stage=intent.stage)
+        else:
+            res = await executors.ejecutar(intent, st)
 
     uso = _uso(res)
-    gasto = intent.name == "playlist"
+    # `gasto` lo marca el ejecutor de playlist. No alcanza con el nombre del
+    # intent (por una confirmacion el ruteado es `confirmar`) ni con los
+    # tokens (la via local devuelve 0 y sigue siendo una playlist).
+    gasto = bool((res.data or {}).get("gasto"))
     modelo = (settings.curator_model if gasto and settings.curator_enabled
               else settings.claude_model if gasto else None)
 

@@ -122,6 +122,8 @@ async def _consultas() -> list[str]:
         ("efemerides_hoy", q.efemerides_hoy()),
         ("tracks_del_periodo (hoy)", q.tracks_del_periodo(hoy)),
         ("tracks_del_periodo (mes)", q.tracks_del_periodo(mes)),
+        ("tracks_de_releases (vacio)", q.tracks_de_releases([])),
+        ("costo_tipico", q.costo_tipico()),
     ]
     if a:
         casos += [
@@ -152,6 +154,10 @@ async def _consultas() -> list[str]:
 
 async def _muestras() -> None:
     print()
+    print(f"  costo tipico de un turno de curador: {await q.costo_tipico():,} tokens")
+    print("  (sale de turn_log; si no hay datos todavia usa el default)")
+
+    print()
     print("=" * 66)
     print("MUESTRAS — lo que va a ver el usuario")
     print("=" * 66)
@@ -169,6 +175,18 @@ async def _muestras() -> None:
 
     print("\n[efemérides]")
     print(render.efemerides_hoy(await q.efemerides_hoy()))
+
+    print("\n[efemérides → dale] — lo que suena es lo que se listó")
+    ef = await q.efemerides_hoy()
+    mbids = [r["mbid"] for r in ef if r.get("mbid")]
+    if mbids:
+        tr = await q.tracks_de_releases(mbids)
+        print(f"  {len(mbids)} discos listados -> {len(tr)} tracks encolables")
+        for t in tr[:5]:
+            print(f"  · {t['artist']} — {t['title']}  ({t['album']})"
+                  + ("  [listo]" if t.get("listo") else "  [hay que bajarlo]"))
+    else:
+        print("  no hay efemérides hoy con mbid cargado")
 
     print("\n[algo que haya escuchado hoy] — tracks listos para sonar")
     tr = await q.tracks_del_periodo(hoy)
