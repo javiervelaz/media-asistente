@@ -5,7 +5,7 @@ MusicBrainz). `play_history` no es el catálogo: es la señal que lo ordena.
 """
 import logging
 
-from app.db import fetch
+from app.db import fetch, fetchrow
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,14 @@ MIN_TRACKS_HEAD = 5      # mínimo para arrancar sin esperar al curador
 MIN_TRACKS_FULL = 8    # mínimo para saltear el curador por completo
 SIM_THRESHOLD = 0.5    # umbral de similitud trigram contra artists.name
 MAX_POR_ARTISTA = 7      # evita que un solo match devuelva 20 temas iguales
+
+#: Si el prompt es practicamente el nombre de un artista, el pedido es
+#: MONOGRAFICO: "pone the Beatles" pide Beatles, no su escena. Ahi la
+#: expansion por grafo esta de mas y hace dano — el scoring premia
+#: procedencia (hasta 4.5) y cache (1.5) mucho mas que la relevancia al
+#: pedido (3.0 * afinidad), asi que un disco de John Lennon que tenes en
+#: vinilo y ya cacheado le gana a cualquier Beatle. Pediste Beatles.
+MONOGRAFICO_SIM = 0.7
 
 
 SQL = """
@@ -33,9 +41,11 @@ universo AS (
         UNION ALL
         SELECT ar.target_mbid, s.sim, 0.5
         FROM artist_relations ar JOIN semilla s ON ar.source_mbid = s.mbid
+        WHERE NOT $5
         UNION ALL
         SELECT ar.source_mbid, s.sim, 0.5
         FROM artist_relations ar JOIN semilla s ON ar.target_mbid = s.mbid
+        WHERE NOT $5
     ) x
     GROUP BY mbid
 ),
@@ -107,14 +117,42 @@ LIMIT $4
 """
 
 
-async def buscar(prompt: str, limite: int = 20) -> list[dict]:
+async def es_monografico(prompt: str) -> bool:
+    """¿El prompt es el nombre de un artista y nada más?
+
+    "the Beatles" sí; "post-punk británico de 1980" no. Decide si se expande
+    por el grafo o no, que es la diferencia entre curar una escena y
+    responder lo que se pidió.
+    """
+    if not prompt or len(prompt.strip()) < 3:
+        return False
+    try:
+        row = await fetchrow(
+            "SELECT similarity(name, $1) AS sim FROM artists "
+            "WHERE name % $1 ORDER BY sim DESC LIMIT 1", prompt.strip())
+    except Exception:
+        logger.exception("no pude decidir si el pedido es monográfico")
+        return False
+    return bool(row and (row["sim"] or 0) >= MONOGRAFICO_SIM)
+
+
+async def buscar(prompt: str, limite: int = 20,
+                 monografico: bool | None = None) -> list[dict]:
     """Tracks rankeados desde el grafo local.
+
+    `monografico=None` autodetecta. En modo monográfico no se expande por
+    `artist_relations`: pediste un artista, no su árbol genealógico.
 
     Lista vacía = sin señal suficiente, que decida el curador.
     Nunca levanta: cualquier error cae al curador de forma silenciosa.
     """
+    if monografico is None:
+        monografico = await es_monografico(prompt)
+    # En un pedido monográfico el tope por artista sobra: que sean todos del
+    # mismo es exactamente lo que se pidió.
+    tope = limite if monografico else MAX_POR_ARTISTA
     try:
-        rows = await fetch(SQL, prompt, SIM_THRESHOLD, MAX_POR_ARTISTA, limite)
+        rows = await fetch(SQL, prompt, SIM_THRESHOLD, tope, limite, monografico)
     except Exception:
         logger.exception("local_search falló, cae al curador")
         return []
@@ -129,8 +167,9 @@ async def buscar(prompt: str, limite: int = 20) -> list[dict]:
         "cached": bool(r["cached"]),
     } for r in rows]
 
-    logger.info("local_search %r → %d tracks (%d ya resueltos)",
-                prompt, len(tracks), sum(1 for t in tracks if t["cached"]))
+    logger.info("local_search %r → %d tracks (%d ya resueltos)%s",
+                prompt, len(tracks), sum(1 for t in tracks if t["cached"]),
+                " [monográfico]" if monografico else "")
     return tracks
 
 
