@@ -28,6 +28,7 @@ from app.history import (
     get_track_at,
     register_advance,
     register_complete,
+    restaurar_current,
     set_current,
 )
 from app.llm import generate_playlist
@@ -45,6 +46,12 @@ logger = logging.getLogger("media-asistente")
 async def lifespan(app: FastAPI):
     await init_pool()
     player.iniciar_observador(on_fail=mark_failed, on_eof=register_complete)
+    # mpv sobrevive al restart del servicio; `_current` no. Sin esto, cada
+    # reinicio con musica sonando pierde en silencio la señal de esa playlist.
+    try:
+        await restaurar_current()
+    except Exception:
+        logger.exception("no pude restaurar la playlist en curso")
     # El harness reusa los cancelables sin importar main (ciclo).
     harness_exec.set_hooks(cancel_fade=_cancel_fade,
                            cancel_resto=_cancel_resto,

@@ -142,6 +142,20 @@ async def set_video(enabled: bool) -> None:
     await _cmd(["set_property", "vid", "auto" if enabled else "no"])
 
 
+async def get_playlist() -> list[str]:
+    """Paths de la cola actual de mpv, en orden.
+
+    Es la unica fuente confiable del ORDEN despues de un reinicio del
+    servicio: mpv sobrevive, el proceso de Python no.
+    """
+    try:
+        entradas = await _cmd(["get_property", "playlist"]) or []
+    except MPVError as e:
+        logger.debug("no pude leer la playlist de mpv: %s", e)
+        return []
+    return [e.get("filename") or "" for e in entradas]
+
+
 PROPS = ("pause", "media-title", "volume", "time-pos",
          "duration", "playlist-count", "playlist-pos")
 

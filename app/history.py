@@ -1,8 +1,10 @@
 """Señal de feedback: qué se salteó y qué se escuchó entero"""
 import logging
 
+from pathlib import Path
+
 from app import player
-from app.db import execute
+from app.db import execute, fetch
 
 logger = logging.getLogger(__name__)
 
@@ -125,3 +127,86 @@ async def register_advance(motivo: str = "next") -> None:
                         t.get("artist"), t.get("title"), elapsed)
     except Exception:
         logger.exception("no pude registrar el feedback")
+
+
+async def restaurar_current() -> int:
+    """Reconstruye `_current` desde play_history al arrancar el servicio.
+
+    mpv sobrevive a un `systemctl restart`, el proceso de Python no. Sin esto,
+    reiniciar con musica sonando deja `_current` vacio y **toda la senal de
+    esa playlist se pierde en silencio**: `register_advance` no encuentra el
+    track y el skip no se registra, `register_complete` tampoco, y `/status`
+    devuelve el nombre del archivo (`dGsHLKyZ8H8.webm`) en vez del tema.
+
+    El ORDEN lo manda mpv —es la unica fuente confiable despues del
+    reinicio— y la metadata sale de play_history, matcheando por youtube_id.
+    Si mpv no tiene cola o ninguna fila matchea, no restaura nada: es mejor
+    quedarse sin historial que atribuir escuchas al track equivocado.
+
+    Devuelve cuantos tracks se restauraron.
+    """
+    try:
+        paths = await player.get_playlist()
+    except Exception:
+        logger.exception("no pude leer la cola de mpv")
+        return 0
+    if not paths:
+        return 0
+
+    # Los archivos se guardan como <youtube_id>.<ext> en el cache.
+    yids = [Path(p).stem for p in paths if p]
+    if not yids:
+        return 0
+
+    try:
+        rows = await fetch(
+            """
+            SELECT DISTINCT ON (youtube_id)
+                   youtube_id, playlist_id, artist, title, rationale,
+                   recording_mbid, artist_mbid
+            FROM play_history
+            WHERE youtube_id = ANY($1::text[])
+            ORDER BY youtube_id, started_at DESC NULLS LAST, id DESC
+            """, yids)
+    except Exception:
+        logger.exception("no pude leer play_history para restaurar")
+        return 0
+
+    por_yid = {r["youtube_id"]: dict(r) for r in rows}
+    if not por_yid:
+        logger.info("cola de mpv sin correspondencia en play_history "
+                    "(%d entradas); no restauro", len(yids))
+        return 0
+
+    # La playlist_id de la mayoria: mpv puede tener restos de una anterior.
+    conteo: dict = {}
+    for r in por_yid.values():
+        pid = r["playlist_id"]
+        conteo[pid] = conteo.get(pid, 0) + 1
+    playlist_id = max(conteo, key=conteo.get)
+
+    tracks, restaurados = [], 0
+    for path, yid in zip(paths, yids):
+        r = por_yid.get(yid)
+        if r and r["playlist_id"] == playlist_id:
+            tracks.append({
+                "artist": r["artist"], "title": r["title"],
+                "rationale": r["rationale"],
+                "recording_mbid": str(r["recording_mbid"]) if r["recording_mbid"] else None,
+                "artist_mbid": str(r["artist_mbid"]) if r["artist_mbid"] else None,
+                "youtube_id": yid,
+            })
+            # Sin esto el observador no puede atribuir el eof y la senal
+            # positiva se pierde igual.
+            player.registrar_track(path, yid)
+            restaurados += 1
+        else:
+            # Un hueco romperia la correspondencia con playlist-pos, asi que
+            # se rellena con un placeholder en vez de saltearlo.
+            tracks.append({"artist": None, "title": Path(path).name,
+                           "youtube_id": yid})
+
+    set_current(playlist_id, tracks)
+    logger.info("_current restaurado: %d de %d tracks de la playlist %s",
+                restaurados, len(tracks), playlist_id)
+    return restaurados
