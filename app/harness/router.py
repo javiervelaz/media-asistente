@@ -217,12 +217,28 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     # Va antes de `playlist` porque "pone algo de mi coleccion" matchea el
     # patron generico de pedido, y ahi terminaba en el curador — que ni
     # siquiera sabe que tenes en el estante.
+    # UN DISCO entero, en orden. Va antes que `reproducir_coleccion`:
+    # "poneme un vinilo" es poner un disco, no catorce temas sueltos.
+    ("reproducir_disco_coleccion", re.compile(
+        r"^(?:pone(?:me|le|lo|la)?|tirame|dame|quiero escuchar|"
+        r"reproduci(?:r|me)?|escuchar)?\s*"
+        r"(?:un|una|algun)\s+"
+        r"(?:disco|album|vinilo|lp)"
+        r"(?:\s+entero|\s+completo)?"
+        r"(?:\s+(?:de\s+|del\s+)?(?:mi|mis|la|el)?\s*"
+        r"(?:coleccion|vinilos?|estante|discos)?)?$")),
+
+    ("reproducir_disco_coleccion", re.compile(
+        r"^(?:pone(?:me|le|lo|la)?|tirame|dame)?\s*"
+        r"(?:un\s+)?(?:disco|album|vinilo)\s+(?:entero|completo)$")),
+
+    # Temas sueltos de la coleccion: variedad en vez de un disco.
     ("reproducir_coleccion", re.compile(
         r"^(?:pone(?:me|le|lo|la)?|tirame|dame|quiero escuchar|"
         r"reproduci(?:r|me)?|escuchar)?\s*"
         r"(?:algo|temas?|musica|un poco)?\s*"
         r"(?:de\s+|del\s+|de\s+la\s+)?"
-        r"(?:un|una|mi|mis|el|los|la)?\s*"
+        r"(?:mi|mis|el|los|la)?\s*"
         r"(?:coleccion|vinilos?|estante|discos)$")),
 
     # --- H4: objetivos ---

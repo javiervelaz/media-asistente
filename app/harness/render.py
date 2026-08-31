@@ -131,7 +131,9 @@ poneme algo que haya escuchado hoy
 (y cuando te ofrezco algo, alcanza con "dale")
 
 *Tu colección* (gratis, sale de la base)
-poné algo de mi colección · qué tengo en vinilo sin escuchar
+poné un disco de mi colección   (un álbum entero, en orden)
+poné algo de mi colección       (temas sueltos, variados)
+qué tengo en vinilo sin escuchar
 
 *Objetivos*
 cómo voy · quiero escuchar más de mi colección
@@ -452,3 +454,21 @@ def coleccion(resp: dict, n: int) -> str:
     if ft:
         linea += f"\nArranca: {ft.get('artist')} — {ft.get('title')}"
     return linea
+
+
+def disco_coleccion(tracks: list[dict]) -> str:
+    """Un disco entero: lo que importa es el álbum, no el primer tema."""
+    if not tracks:
+        return sin_disco_coleccion()
+    t0 = tracks[0]
+    faltan = sum(1 for t in tracks if not t.get("listo"))
+    linea = f"{t0.get('artist')} — {t0.get('album')}\n{len(tracks)} temas, en orden."
+    if faltan:
+        linea += f" ({faltan} hay que bajarlos)"
+    return linea
+
+
+def sin_disco_coleccion() -> str:
+    return ("No encontré un disco de tu colección para poner entero: los que "
+            "tenés cargados o sonaron hace poco, o no tienen tracklist. "
+            "Probá \"algo de mi colección\" para temas sueltos.")

@@ -67,6 +67,8 @@ CATALOGO: tuple[Spec, ...] = (
     Spec("efemerides_hoy",     "que aniversario de disco cae hoy"),
     Spec("reproducir_historial",
          "volver a poner lo que ya se escucho en un periodo"),
+    Spec("reproducir_disco_coleccion",
+         "poner un album entero de la coleccion, en orden"),
     Spec("reproducir_coleccion",
          "poner discos de la coleccion en vinilo, sin curador"),
     Spec("reproducir_releases",
@@ -115,7 +117,7 @@ IMPLEMENTADOS: set[str] = {
     "confirmar", "rechazar",
     # H4
     "estado_objetivos", "borrar_objetivo", "reproducir_objetivo",
-    "reproducir_coleccion",
+    "reproducir_coleccion", "reproducir_disco_coleccion",
     "set_objetivo_coleccion", "set_objetivo_descubrimiento",
     "set_objetivo_genero", "set_objetivo_profundidad",
 }

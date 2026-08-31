@@ -448,6 +448,29 @@ async def _reproducir_coleccion(intent, st: SessionState) -> Result:
                   data={"count": len(tracks)}, actions=["playlist"])
 
 
+async def _reproducir_disco_coleccion(intent, st: SessionState) -> Result:
+    """Un album entero de tu coleccion, en orden.
+
+    Cuando alguien pone un vinilo lo pone entero; eso es lo que distingue
+    tener discos de tener una playlist. Cero tokens: es un SELECT.
+    """
+    if _lanzar_tracks is None:
+        return Result(render.error("el reproductor no esta enganchado"), ok=False)
+
+    tracks = await queries.disco_de_coleccion()
+    if not tracks:
+        est = await queries.estado_coleccion()
+        return Result(render.coleccion_vacia(est)
+                      or render.sin_disco_coleccion(), ok=False)
+
+    album = tracks[0].get("album") or "un disco"
+    resp = await _lanzar_tracks(tracks, album, st.room_id)
+    st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None,
+             last_artist=tracks[0].get("artist"))
+    return Result(render.disco_coleccion(tracks), data={"count": len(tracks)},
+                  actions=["playlist"])
+
+
 async def _reproducir_objetivo(intent: Intent, st: SessionState) -> Result:
     """La playlist que mas mueve el objetivo mas atrasado. Cero tokens."""
     if _lanzar_tracks is None:
@@ -508,6 +531,7 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "borrar_objetivo": _borrar_objetivo,
     "reproducir_objetivo": _reproducir_objetivo,
     "reproducir_coleccion": _reproducir_coleccion,
+    "reproducir_disco_coleccion": _reproducir_disco_coleccion,
     "rechazar": _rechazar,
     "no_entendido": _no_entendido,
 }

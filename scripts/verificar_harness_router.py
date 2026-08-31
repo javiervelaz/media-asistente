@@ -137,7 +137,11 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     # la colección, directo y sin curador
     ("poné algo de mi colección",           "reproducir_coleccion", {}),
     ("algo de mi colección",                "reproducir_coleccion", {}),
-    ("poneme un vinilo",                    "reproducir_coleccion", {}),
+    ("poneme un vinilo",                    "reproducir_disco_coleccion", {}),
+    ("poné un disco de mi colección",       "reproducir_disco_coleccion", {}),
+    ("un disco entero",                     "reproducir_disco_coleccion", {}),
+    ("poneme un album de mi coleccion",     "reproducir_disco_coleccion", {}),
+    ("dame un vinilo entero",               "reproducir_disco_coleccion", {}),
     ("dame algo del estante",               "reproducir_coleccion", {}),
     ("mis discos",                          "reproducir_coleccion", {}),
 

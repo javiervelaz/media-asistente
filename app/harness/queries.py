@@ -432,22 +432,78 @@ async def costo_tipico() -> int:
 # Colección: discos del estante sin escuchar entero, o no escuchados hace
 # rato. Prioriza lo ya resuelto para que arranque rápido, pero no lo exige.
 SQL_OBJ_COLECCION = """
+WITH senal AS (
+    SELECT recording_mbid,
+           count(*) FILTER (WHERE skipped)   AS skips,
+           count(*) FILTER (WHERE completed) AS completos,
+           max(started_at)                   AS ultima
+    FROM play_history WHERE recording_mbid IS NOT NULL
+    GROUP BY recording_mbid
+),
+candidatos AS (
+    SELECT rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
+           rc.length_ms, r.title AS album, a.mbid AS artist_mbid,
+           (tr.recording_mbid IS NOT NULL) AS listo,
+           row_number() OVER (
+               PARTITION BY a.mbid
+               ORDER BY (tr.recording_mbid IS NOT NULL) DESC, random()
+           ) AS n_artista
+    FROM ephemerides e
+    JOIN releases   r  ON r.mbid = e.mbid::uuid
+    JOIN artists    a  ON a.mbid = r.artist_mbid
+    JOIN recordings rc ON rc.release_mbid = r.mbid
+    LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+    LEFT JOIN senal s ON s.recording_mbid = rc.mbid
+    WHERE e.weight = 1 AND e.mbid IS NOT NULL
+      AND COALESCE(tr.fail_count, 0) < 3
+      AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+      -- La señal del Bloque B: lo que salteás seguido no vuelve.
+      AND COALESCE(s.skips, 0) < 2
+      -- Nada escuchado en los últimos 60 días.
+      AND (s.ultima IS NULL OR s.ultima < now() - interval '60 days')
+)
+SELECT recording_mbid, artist, title, length_ms, album, listo
+FROM candidatos
+WHERE n_artista <= 2          -- sin esto podían salir 14 del mismo artista
+ORDER BY listo DESC, random()
+LIMIT $1
+"""
+
+# Un disco entero de la coleccion, en orden. Cuando alguien pone un vinilo
+# lo pone entero: eso es lo que distingue tener discos de tener una playlist.
+SQL_OBJ_DISCO = """
+WITH elegido AS (
+    SELECT r.mbid AS release_mbid,
+           count(*) FILTER (WHERE tr.recording_mbid IS NOT NULL) AS listos,
+           count(*) AS temas
+    FROM ephemerides e
+    JOIN releases   r  ON r.mbid = e.mbid::uuid
+    JOIN recordings rc ON rc.release_mbid = r.mbid
+    LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+    LEFT JOIN play_history ph ON ph.recording_mbid = rc.mbid
+    WHERE e.weight = 1 AND e.mbid IS NOT NULL
+      AND COALESCE(tr.fail_count, 0) < 3
+    GROUP BY r.mbid
+    -- Un disco de verdad, no un single ni una caja de 40 temas.
+    HAVING count(*) BETWEEN 4 AND 25
+       AND (max(ph.started_at) IS NULL
+            OR max(ph.started_at) < now() - interval '60 days')
+    -- El que menos descargas necesita primero: en un Pi 3B bajar 10 temas
+    -- es la diferencia entre escuchar ahora y esperar.
+    ORDER BY listos DESC, random()
+    LIMIT 1
+)
 SELECT rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
        rc.length_ms, r.title AS album,
        (tr.recording_mbid IS NOT NULL) AS listo
-FROM ephemerides e
-JOIN releases   r  ON r.mbid = e.mbid::uuid
+FROM elegido el
+JOIN releases   r  ON r.mbid = el.release_mbid
 JOIN artists    a  ON a.mbid = r.artist_mbid
 JOIN recordings rc ON rc.release_mbid = r.mbid
 LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
-WHERE e.weight = 1 AND e.mbid IS NOT NULL
-  AND COALESCE(tr.fail_count, 0) < 3
+WHERE COALESCE(tr.fail_count, 0) < 3
   AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
-  AND NOT EXISTS (
-      SELECT 1 FROM play_history ph
-      WHERE ph.recording_mbid = rc.mbid
-        AND ph.started_at > now() - interval '60 days')
-ORDER BY listo DESC, random()
+ORDER BY rc.position NULLS LAST      -- en orden de disco, no al azar
 LIMIT $1
 """
 
@@ -544,4 +600,14 @@ async def tracks_para_objetivo(kind: str, spec: dict | None = None,
         rows = await fetch(SQL_OBJ_PROFUNDIDAD, limite)
     else:
         return []
+    return [dict(r) for r in rows]
+
+
+async def disco_de_coleccion(limite: int = 25) -> list[dict]:
+    """Un album entero de tu coleccion, en orden de disco.
+
+    No es lo mismo que `tracks_para_objetivo("coleccion")`, que devuelve
+    temas sueltos de artistas distintos. Poner un vinilo es poner un disco.
+    """
+    rows = await fetch(SQL_OBJ_DISCO, limite)
     return [dict(r) for r in rows]

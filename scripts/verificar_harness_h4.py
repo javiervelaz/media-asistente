@@ -195,6 +195,25 @@ async def _material() -> list[str]:
     if genero:
         print(f"  tag más frecuente en la base: {tag!r} ({genero['n']} artistas)")
 
+    # El disco entero: lo que se lista tiene que ser UN album, en orden.
+    try:
+        disco = await q.disco_de_coleccion()
+        if disco:
+            albumes = {t["album"] for t in disco}
+            artistas = {t["artist"] for t in disco}
+            listos = sum(1 for t in disco if t.get("listo"))
+            print(f"  disco entero      {len(disco):3} temas · "
+                  f"{listos} resueltos · {list(artistas)[0]} — {list(albumes)[0]}")
+            if len(albumes) != 1:
+                print(f"      FALLA: {len(albumes)} álbumes distintos en un "
+                      "disco entero")
+                fallos.append("disco_de_coleccion mezcla álbumes")
+        else:
+            print("  disco entero        0 temas (sin álbum candidato)")
+    except Exception as ex:
+        print(f"  FALLA  disco_de_coleccion: {type(ex).__name__}: {ex}")
+        fallos.append("disco_de_coleccion")
+
     for kind, spec in (("coleccion", {}), ("descubrimiento", {}),
                        ("profundidad", {}),
                        ("genero", {"genero": tag, "tags": [tag]})):
@@ -209,6 +228,16 @@ async def _material() -> list[str]:
         listos = sum(1 for t in tracks if t.get("listo"))
         print(f"  {kind:16} {len(tracks):3} tracks ({listos} ya resueltos)  {ms:4} ms"
               + ("  << LENTO" if ms > LENTO_MS else ""))
+        if kind == "coleccion" and tracks:
+            por_artista = {}
+            for t in tracks:
+                por_artista[t["artist"]] = por_artista.get(t["artist"], 0) + 1
+            peor = max(por_artista.values())
+            print(f"      {len(por_artista)} artistas distintos, "
+                  f"máximo {peor} por artista"
+                  + ("  FALLA: el tope es 2" if peor > 2 else ""))
+            if peor > 2:
+                fallos.append("el tope por artista no se respeta")
         for t in tracks[:2]:
             print(f"      · {t['artist']} — {t['title']}")
         if ms > LENTO_MS:
