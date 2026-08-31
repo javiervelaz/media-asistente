@@ -65,6 +65,8 @@ CATALOGO: tuple[Spec, ...] = (
     Spec("discografia",        "que discos hay de un artista"),
     Spec("relaciones",         "quien toco con quien, vinculos entre artistas"),
     Spec("efemerides_hoy",     "que aniversario de disco cae hoy"),
+    Spec("reproducir_historial",
+         "volver a poner lo que ya se escucho en un periodo"),
 
     # --- objetivos (H4) ---
     Spec("estado_objetivos", "como viene contra los objetivos de escucha"),
@@ -91,6 +93,10 @@ IMPLEMENTADOS: set[str] = {
     "control_stop", "control_replay", "control_vol_up", "control_vol_down",
     "control_vol_set", "estado_actual", "estado_cola",
     "playlist", "saludo", "ayuda", "repreguntar",
+    # H2
+    "historial_periodo", "historial_artista", "top_escuchados", "salteados",
+    "nunca_escuchado", "discografia", "relaciones", "efemerides_hoy",
+    "reproducir_historial",
 }
 
 

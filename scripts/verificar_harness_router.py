@@ -72,6 +72,7 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("poné algo de los discos que tengo en vinilo",     "playlist", None),
     ("quiero escuchar algo de jazz modal",              "playlist", None),
     ("tirame cumbia santafesina",                       "playlist", None),
+    ("poné algo tranquilo para la cena",                "playlist", None),
 
     # El caso que costo 19k tokens: el normalizador come "charly" como
     # vocativo, queda "hola", ningun patron matcheaba y el curador leia el
@@ -82,6 +83,31 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("buen día",                    "saludo", {}),
     ("ayuda",                       "ayuda", {}),
     ("qué sabés hacer",             "ayuda", {}),
+
+    # --- H2: lo que antes caia al fallback y costaba ~19k tokens ---
+    ("qué escuché hoy",                     "historial_periodo", None),
+    ("qué escuché la semana pasada",        "historial_periodo", None),
+    ("qué sonó ayer",                       "historial_periodo", None),
+    ("qué escuché",                         "historial_periodo", None),
+    ("qué escuché de Sumo",                 "historial_artista", {"artista": "sumo"}),
+    ("cuántas veces escuché de Spinetta",   "historial_artista", None),
+    ("qué escucho más",                     "top_escuchados", {}),
+    ("mis más escuchados",                  "top_escuchados", {}),
+    ("qué me salteo",                       "salteados", {}),
+    ("qué tengo en vinilo sin escuchar",    "nunca_escuchado", {}),
+    ("discos sin escuchar",                 "nunca_escuchado", {}),
+    ("qué discos tengo de Killing Joke",    "discografia", {"artista": "killing joke"}),
+    ("discografía de Wire",                 "discografia", {"artista": "wire"}),
+    ("quién tocó con Luis Alberto Spinetta","relaciones", None),
+    ("con quién tocó Charly García",        "relaciones", None),
+    ("efemérides",                          "efemerides_hoy", {}),
+    ("qué se cumple hoy",                   "efemerides_hoy", {}),
+
+    # El pedido que motivo todo el bloque: reproduce, no lista.
+    ("algo que haya escuchado hoy",              "reproducir_historial", None),
+    ("poneme algo que haya escuchado hoy",       "reproducir_historial", None),
+    ("poné algo que escuché ayer",               "reproducir_historial", None),
+    ("volvé a poner lo que sonó esta semana",    "reproducir_historial", None),
 ]
 
 #: Tienen que caer en no_entendido. Un patron que se coma alguna de estas es
@@ -91,12 +117,7 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
 #: playlist en vez de responder. Es el gasto que H2 elimina: cada una de estas
 #: frases va a aparecer en `SELECT text_in FROM turn_log WHERE stage='fallback'`.
 NEGATIVOS: list[str] = [
-    "qué escuché la semana pasada",
-    "qué discos tengo de Killing Joke",
-    "quién tocó con Luis Alberto Spinetta",
-    "cómo voy con mis objetivos",
-    "cuántas veces escuché Sumo este mes",
-    "qué me salteo siempre",
+    "cómo voy con mis objetivos",          # H4
     "",
 ]
 

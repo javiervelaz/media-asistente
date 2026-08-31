@@ -150,11 +150,19 @@ curl -s -X POST localhost:8000/playlist \
   -d '{"prompt": "post-punk británico de 1980", "n_tracks": 20, "play_now": false}' \
   | jq '{source, verificacion}'
 
+python -m scripts.verificar_harness_router
+python -m scripts.verificar_harness_smoke
+curl -s -X POST localhost:8000/chat \
+  -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
+  -d '{"text":"qué suena","session_id":"cli"}' | jq
+
 capacidad del disco rasp
 df -h / 
 
 restart rasp
 systemctl --user restart media-api
+
+source .venv/bin/activate 
 
 
 

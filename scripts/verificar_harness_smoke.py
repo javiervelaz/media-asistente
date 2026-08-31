@@ -60,6 +60,63 @@ ESCRITO = []
 telemetry.log_turn = lambda **kw: ESCRITO.append(kw)
 chat.log_turn = telemetry.log_turn
 
+# --- H2: la base falsa -----------------------------------------------------
+from app.harness import queries, executors as _ex
+from datetime import datetime, timedelta, timezone
+
+_HOY = [
+    {"artist": "Wire", "title": "Reuters", "started_at": datetime.now(timezone.utc),
+     "completed": True, "skipped": False},
+    {"artist": "Magazine", "title": "Shot by Both Sides",
+     "started_at": datetime.now(timezone.utc), "completed": True, "skipped": False},
+    {"artist": "Gang of Four", "title": "Damaged Goods",
+     "started_at": datetime.now(timezone.utc), "completed": False, "skipped": True},
+]
+
+async def _q_historial(v, limite=40): return list(_HOY)
+async def _q_top(dias=30): return [
+    {"artist": "Killing Joke", "completos": 12, "veces": 15, "temas": 8},
+    {"artist": "Wire", "completos": 7, "veces": 7, "temas": 5}]
+async def _q_salteados(dias=90): return [
+    {"artist": "Los Mirlos", "skips": 4, "temas": 3}]
+async def _q_nunca(limite=15): return [
+    {"artist": "Sumo", "album": "Divididos por la Felicidad", "anio": "1985"},
+    {"artist": "Virus", "album": "Locura", "anio": "1985"}]
+async def _q_efem(limite=8): return [
+    {"artist": "Joy Division", "album": "Closer", "anio": "1980",
+     "aniversario": 46, "weight": 1}]
+async def _q_artista(nombre):
+    return {"mbid": "aaaaaaaa-0000-0000-0000-000000000000", "name": "Wire",
+            "sim": 0.9} if "wire" in nombre.lower() else None
+async def _q_disco(mbid, limite=20): return [
+    {"title": "Pink Flag", "primary_type": "Album", "anio": 1977,
+     "tracks": 21, "en_vinilo": True}]
+async def _q_rel(mbid, limite=15): return [
+    {"name": "Colin Newman", "country": "GB", "rel_type": "member_of_band",
+     "releases": 9}]
+async def _q_hist_art(mbid, nombre, dias=90): return [
+    {"title": "Reuters", "veces": 4, "completos": 3, "skips": 1,
+     "ultima": datetime.now(timezone.utc)}]
+async def _q_tracks(v, limite=14): return [
+    {"recording_mbid": "bbbb", "artist": "Wire", "title": "Reuters",
+     "youtube_id": "x1"},
+    {"recording_mbid": "cccc", "artist": "Magazine",
+     "title": "Shot by Both Sides", "youtube_id": "x2"}]
+
+for nombre, fn in [("historial_periodo", _q_historial), ("top_escuchados", _q_top),
+                   ("salteados", _q_salteados), ("nunca_escuchado", _q_nunca),
+                   ("efemerides_hoy", _q_efem), ("resolver_artista", _q_artista),
+                   ("discografia", _q_disco), ("relaciones", _q_rel),
+                   ("historial_artista", _q_hist_art),
+                   ("tracks_del_periodo", _q_tracks)]:
+    setattr(queries, nombre, fn)
+_ex.queries = queries
+
+async def fake_lanzar(tracks_, titulo, room_id="main"):
+    LLAMADAS.append(("lanzar", titulo, len(tracks_)))
+    return {"playlist_id": "p-2", "title": titulo, "queued": len(tracks_),
+            "first_track": tracks_[0]}
+
 # generador de playlists falso
 async def fake_playlist(prompt, room_id="main"):
     LLAMADAS.append(("playlist", prompt))
@@ -67,15 +124,20 @@ async def fake_playlist(prompt, room_id="main"):
             "first_track": {"artist": "Wire", "title": "Reuters"},
             "playlist_id": "p-1",
             "usage": {"in": 18400, "out": 900, "cache_read": 15200}}
-executors.set_hooks(crear_playlist=fake_playlist)
+executors.set_hooks(crear_playlist=fake_playlist, lanzar_tracks=fake_lanzar)
 
 
 async def main():
     frases = ["hola charly", "pasala", "che charly bajale 20", "qué suena",
               "qué sigue", "poné el volumen en 40", "de nuevo", "gracias",
-              "ayuda",
-              "armá una playlist de post-punk británico de 1980",
-              "qué escuché la semana pasada"]
+              # --- H2 ---
+              "qué escuché hoy", "qué escucho más", "qué me salteo",
+              "qué tengo en vinilo sin escuchar", "efemérides",
+              "qué discos tengo de Wire", "quién tocó con Wire",
+              "qué escuché de Wire", "qué discos tengo de Pescado Rabioso",
+              "poneme algo que haya escuchado hoy",
+              # --- lo unico que gasta ---
+              "armá una playlist de post-punk británico de 1980"]
     print("=" * 66)
     for f in frases:
         r = await chat.responder(f, session_id="tg:937324746")
@@ -92,7 +154,8 @@ async def main():
     for e in caros:
         print(f"  gasto: {e['intent']} (stage={e['stage']}) "
               f"in={e['input_tokens']} cache={e['cached_tokens']} out={e['output_tokens']}")
-    assert gratis == 9, gratis
+    assert gratis == len(ESCRITO) - 1, (gratis, len(ESCRITO))
+    assert ("lanzar", "De nuevo: hoy", 2) in LLAMADAS, "reproducir_historial no lanzo"
     assert ("register_advance", "next") in LLAMADAS, "el skip por chat no se registro"
     assert ESTADO["volume"] == 40
     print("\nOK — el skip por chat registra feedback igual que /control/next")

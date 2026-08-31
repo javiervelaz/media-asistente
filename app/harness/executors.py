@@ -12,7 +12,7 @@ import logging
 from typing import Awaitable, Callable
 
 from app import player
-from app.harness import render
+from app.harness import queries, render
 from app.harness.intents import Intent, Result
 from app.harness.session import SessionState
 from app.history import get_current, get_track_at, register_advance
@@ -25,18 +25,22 @@ DELTA_VOL = 10          # cuanto mueve un "subile" pelado
 # --- hooks que vive en main.py ----------------------------------------------
 _cancel_fade: Callable[[], None] = lambda: None
 _cancel_resto: Callable[[], None] = lambda: None
-_crear_playlist = None          # (prompt, room_id, n_tracks) -> dict
+_crear_playlist = None          # (prompt, room_id) -> dict
+_lanzar_tracks = None           # (tracks, titulo, room_id) -> dict
 
 
-def set_hooks(cancel_fade=None, cancel_resto=None, crear_playlist=None) -> None:
+def set_hooks(cancel_fade=None, cancel_resto=None, crear_playlist=None,
+              lanzar_tracks=None) -> None:
     """Se llama una vez desde el lifespan de FastAPI."""
-    global _cancel_fade, _cancel_resto, _crear_playlist
+    global _cancel_fade, _cancel_resto, _crear_playlist, _lanzar_tracks
     if cancel_fade:
         _cancel_fade = cancel_fade
     if cancel_resto:
         _cancel_resto = cancel_resto
     if crear_playlist:
         _crear_playlist = crear_playlist
+    if lanzar_tracks:
+        _lanzar_tracks = lanzar_tracks
 
 
 # --- control ----------------------------------------------------------------
@@ -173,6 +177,115 @@ async def _no_entendido(intent, st) -> Result:
     return Result(render.no_entendido(), ok=False)
 
 
+
+# ============================================================== H2: lectura
+#
+# Ninguno de estos gasta un token. Cada uno reemplaza un turno que caia al
+# fallback y terminaba en el curador — que ademas no podia responderlo: su
+# tool `get_play_history` esta descrita para EVITAR lo reciente, trae 30 dias
+# agrupados y sin recording_mbid.
+
+DIAS_ARTISTA = 90
+DIAS_TOP = 30
+DIAS_SKIPS = 90
+
+
+async def _con_artista(intent: Intent, st: SessionState):
+    """Resuelve el slot `artista` contra el grafo.
+
+    Si el usuario no nombro a nadie, usa el ultimo mencionado en la sesion:
+    asi "y quien toco con el" funciona sin mandar historial al modelo.
+    """
+    nombre = (intent.slots.get("artista") or "").strip()
+    if not nombre and st.last_artist:
+        nombre = st.last_artist
+    if not nombre:
+        return None, None
+    a = await queries.resolver_artista(nombre)
+    if a:
+        st.tocar(last_artist=a["name"], last_artist_mbid=str(a["mbid"]))
+    return a, nombre
+
+
+async def _historial_periodo(intent: Intent, st) -> Result:
+    v = queries.ventana(intent.slots.get("cuando", ""))
+    rows = await queries.historial_periodo(v)
+    return Result(render.historial_periodo(rows, v.etiqueta),
+                  data={"count": len(rows), "ventana": v.etiqueta})
+
+
+async def _historial_artista(intent: Intent, st) -> Result:
+    a, nombre = await _con_artista(intent, st)
+    if not nombre:
+        return Result(render.no_entendido(), ok=False)
+    rows = await queries.historial_artista(
+        a["mbid"] if a else None, nombre, DIAS_ARTISTA)
+    etiqueta = a["name"] if a else nombre
+    return Result(render.historial_artista(rows, etiqueta, DIAS_ARTISTA),
+                  data={"count": len(rows)})
+
+
+async def _top_escuchados(intent, st) -> Result:
+    rows = await queries.top_escuchados(DIAS_TOP)
+    return Result(render.top_escuchados(rows, DIAS_TOP), data={"count": len(rows)})
+
+
+async def _salteados(intent, st) -> Result:
+    rows = await queries.salteados(DIAS_SKIPS)
+    return Result(render.salteados(rows, DIAS_SKIPS), data={"count": len(rows)})
+
+
+async def _nunca_escuchado(intent, st) -> Result:
+    rows = await queries.nunca_escuchado()
+    return Result(render.nunca_escuchado(rows), data={"count": len(rows)})
+
+
+async def _discografia(intent: Intent, st) -> Result:
+    a, nombre = await _con_artista(intent, st)
+    if not nombre:
+        return Result(render.no_entendido(), ok=False)
+    if not a:
+        return Result(render.sin_artista(nombre), ok=False)
+    rows = await queries.discografia(a["mbid"])
+    return Result(render.discografia(rows, a["name"]), data={"count": len(rows)})
+
+
+async def _relaciones(intent: Intent, st) -> Result:
+    a, nombre = await _con_artista(intent, st)
+    if not nombre:
+        return Result(render.no_entendido(), ok=False)
+    if not a:
+        return Result(render.sin_artista(nombre), ok=False)
+    rows = await queries.relaciones(a["mbid"])
+    return Result(render.relaciones(rows, a["name"]), data={"count": len(rows)})
+
+
+async def _efemerides_hoy(intent, st) -> Result:
+    rows = await queries.efemerides_hoy()
+    return Result(render.efemerides_hoy(rows), data={"count": len(rows)})
+
+
+async def _reproducir_historial(intent: Intent, st: SessionState) -> Result:
+    """"Poné algo que haya escuchado hoy" — el caso que motivo el H2.
+
+    No pasa por el curador ni por la resolucion en YouTube: son tracks que ya
+    sonaron, con `recording_mbid` ya resuelto. En un Pi 3B eso es la
+    diferencia entre arrancar al instante y esperar una descarga por tema.
+    """
+    if _lanzar_tracks is None:
+        return Result(render.error("el reproductor no esta enganchado"), ok=False)
+
+    v = queries.ventana(intent.slots.get("cuando", ""))
+    tracks = await queries.tracks_del_periodo(v)
+    if not tracks:
+        return Result(render.historial_vacio_para_reproducir(v.etiqueta), ok=False)
+
+    resp = await _lanzar_tracks(tracks, f"De nuevo: {v.etiqueta}", st.room_id)
+    st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
+    return Result(render.reproducir_historial(resp, v.etiqueta, len(tracks)),
+                  data={"count": len(tracks)}, actions=["playlist"])
+
+
 EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "control_play": _play,
     "control_pause": _pause,
@@ -189,6 +302,16 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "saludo": _saludo,
     "ayuda": _ayuda,
     "repreguntar": _repreguntar,
+    # --- H2 ---
+    "historial_periodo": _historial_periodo,
+    "historial_artista": _historial_artista,
+    "top_escuchados": _top_escuchados,
+    "salteados": _salteados,
+    "nunca_escuchado": _nunca_escuchado,
+    "discografia": _discografia,
+    "relaciones": _relaciones,
+    "efemerides_hoy": _efemerides_hoy,
+    "reproducir_historial": _reproducir_historial,
     "no_entendido": _no_entendido,
 }
 

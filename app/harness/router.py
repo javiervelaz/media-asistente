@@ -108,6 +108,67 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"^(?:ayuda|help|que sabes hacer|que podes hacer|comandos|"
         r"opciones|que hago|menu)$")),
 
+    # --- H2: lectura de la base. Todo esto era ~19k tokens por turno. ---
+    #
+    # Van ANTES de playlist: "poneme algo que haya escuchado hoy" tiene que
+    # ganarle al patron generico de pedido curatorial, que se lo comeria
+    # entero y lo mandaria al curador — que no puede responderlo.
+
+    # Exige un marcador explicito de reproduccion: o un verbo de poner, o
+    # que la frase arranque con "algo". Sin eso, "que escuche hoy" —que es una
+    # CONSULTA— matchearia aca y te pondria musica en vez de responderte.
+    ("reproducir_historial", re.compile(
+        r"^(?:pone(?:me|lo|la|le)?|tirame|dame|repeti(?:me)?|"
+        r"volve a poner|volvamos a poner)\s+"
+        r"(?:algo|temas?|musica|lo)?\s*(?:de\s+lo\s+)?que\s+"
+        r"(?:haya\s+|hayamos\s+|ya\s+)?"
+        r"(?:escuchad[oa]|escuche|escuchamos|sono|puse)\b(?P<cuando>.*)$")),
+
+    ("reproducir_historial", re.compile(
+        r"^algo\s+(?:de\s+lo\s+)?que\s+(?:haya\s+|hayamos\s+|ya\s+)?"
+        r"(?:escuchad[oa]|escuche|escuchamos|sono|puse)\b(?P<cuando>.*)$")),
+
+    ("reproducir_historial", re.compile(
+        r"^(?:pone(?:me|lo|la|le)?|tirame|dame|repeti(?:me)?|volve a poner)\s+"
+        r"lo\s+(?:de|que)\s+(?P<cuando>.+)$")),
+
+    ("historial_artista", re.compile(
+        r"^(?:que|cuanto|cuantas veces)\s+"
+        r"(?:escuche|escuchamos|puse|sono)\s+de\s+(?P<artista>.+)$")),
+
+    ("historial_periodo", re.compile(
+        r"^(?:que|cual(?:es)?)\s+(?:escuche|escuchamos|sono|puse|"
+        r"estuve escuchando|vengo escuchando)\b(?P<cuando>.*)$")),
+
+    ("top_escuchados", re.compile(
+        r"^(?:(?:que|a quien|quien)\s+(?:escucho|escuchamos)\s+mas.*"
+        r"|mis mas escuchados|top|top artistas|mas escuchados|"
+        r"lo que mas escucho)$")),
+
+    ("salteados", re.compile(
+        r"^(?:que\s+(?:me\s+)?salte[oa].*|que\s+me\s+salteo|"
+        r"que no me gusta|mis skips|que salteo siempre)$")),
+
+    ("nunca_escuchado", re.compile(
+        r"^(?:que\s+(?:tengo|hay)\s+(?:en\s+)?(?:vinilo|el estante)"
+        r"(?:\s+sin\s+escuchar)?"
+        r"|discos sin escuchar|que no escuche nunca|"
+        r"vinilos sin escuchar|que me falta escuchar)$")),
+
+    ("discografia", re.compile(
+        r"^(?:que\s+discos\s+(?:tengo|hay|tenes)\s+de|discografia\s+de|"
+        r"discos\s+de|albumes\s+de)\s+(?P<artista>.+)$")),
+
+    ("relaciones", re.compile(
+        r"^(?:quien(?:es)?\s+toc(?:o|aron)\s+(?:con|en)|"
+        r"con\s+quien(?:es)?\s+toc(?:o|aron)|"
+        r"relaciones\s+de|vinculos\s+de|quien(?:es)?\s+conoce)"
+        r"\s+(?P<artista>.+)$")),
+
+    ("efemerides_hoy", re.compile(
+        r"^(?:efemerides|que se cumple hoy|que paso un dia como hoy|"
+        r"aniversarios?|que se festeja hoy|que cumple anos hoy)$")),
+
     # Playlist va ULTIMO: cualquier control o consulta le gana. El prompt
     # que se manda al curador es el texto ORIGINAL, no el normalizado —
     # las tildes y las mayusculas son parte del pedido curatorial.
@@ -125,6 +186,15 @@ PATRONES: list[tuple[str, re.Pattern]] = [
 
 def _slots(name: str, m: re.Match) -> dict:
     g = m.groupdict()
+
+    if "artista" in g and g["artista"]:
+        return {"artista": g["artista"].strip()}
+
+    if "cuando" in g:
+        # Puede venir vacio ("que escuche" pelado): la ventana por defecto
+        # es hoy, que es de lo que habla el usuario el 90% de las veces.
+        return {"cuando": (g.get("cuando") or "").strip()}
+
     n = g.get("n") or g.get("n2")
     if n is None:
         return {}

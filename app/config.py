@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # mensaje de una sola palabra que no matcheo ningun patron casi nunca es
     # un pedido curatorial, y siempre cuesta lo mismo que uno real.
     harness_min_palabras_playlist: int = 2
+    # "hoy" es hoy DONDE ESTA EL USUARIO. Si el proceso corre en UTC, a las
+    # 21:30 de Cordoba ya es manana en UTC y "que escuche hoy" devuelve vacio
+    # justo en el horario en que mas se usa el reproductor.
+    harness_tz: str = "America/Argentina/Cordoba"
 
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 

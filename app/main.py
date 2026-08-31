@@ -47,7 +47,8 @@ async def lifespan(app: FastAPI):
     # El harness reusa los cancelables sin importar main (ciclo).
     harness_exec.set_hooks(cancel_fade=_cancel_fade,
                            cancel_resto=_cancel_resto,
-                           crear_playlist=_harness_playlist)
+                           crear_playlist=_harness_playlist,
+                           lanzar_tracks=_harness_lanzar)
     yield
     await close_pool()
 
@@ -751,6 +752,20 @@ async def _harness_playlist(prompt: str, room_id: str = "main") -> dict:
     return await create_playlist(PlaylistRequest(
         prompt=prompt, room_id=room_id,
         n_tracks=settings.harness_n_tracks))
+
+
+async def _harness_lanzar(tracks_: list[dict], titulo: str,
+                          room_id: str = "main") -> dict:
+    """Reproduce tracks que YA salieron de la base, sin pasar por el curador.
+
+    Lo usa `reproducir_historial`: los tracks vienen de play_history con su
+    recording_mbid ya resuelto, asi que resolve_tracks pega en la cache y
+    arranca al instante en vez de bajar cada tema con yt-dlp.
+
+    source="replay" — es literalmente eso, y `playlists.source` tiene un
+    CHECK constraint: no se pueden inventar valores nuevos desde acá.
+    """
+    return await _lanzar(tracks_, titulo, room_id=room_id, source="replay")
 
 
 
