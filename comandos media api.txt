@@ -156,11 +156,26 @@ curl -s -X POST localhost:8000/chat \
   -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" -H "Content-Type: application/json" \
   -d '{"text":"qué suena","session_id":"cli"}' | jq
 
+API=$(grep ^ .env | cut -d= -f2)
+ch() { curl -s -X POST localhost:8000/chat -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  -H "Content-Type: application/json" -d "{\"text\":\"$1\",\"session_id\":\"cli\"}" \
+  | jq -r '"[\(.intent) · \(.stage) · \(if .free then "GRATIS" else "\(.cost_tokens) tok" end)] \(.reply)"'; }
+
+ch "hola charly"
+ch "qué escuché hoy"
+ch "qué escucho más"
+ch "qué tengo en vinilo sin escuchar"
+ch "efemérides"
+ch "qué discos tengo de Killing Joke"
+ch "quién tocó con Killing Joke"
+ch "poneme algo que haya escuchado hoy"
+
 capacidad del disco rasp
 df -h / 
 
 restart rasp
 systemctl --user restart media-api
+systemctl --user restart media-api 
 
 source .venv/bin/activate 
 

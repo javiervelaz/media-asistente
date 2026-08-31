@@ -12,7 +12,7 @@ import logging
 from typing import Awaitable, Callable
 
 from app import player
-from app.harness import queries, render
+from app.harness import goals, queries, render
 from app.harness.intents import Intent, Result
 from app.harness.session import SessionState
 from app.history import get_current, get_track_at, register_advance
@@ -341,6 +341,100 @@ async def _reproducir_historial(intent: Intent, st: SessionState) -> Result:
                   data={"count": len(tracks)}, actions=["playlist"])
 
 
+
+# ============================================================== H4: objetivos
+#
+# Un sesgo, no una cuota. Si el curador arma playlists peores para cumplir una
+# metrica, se saltean, y los skips envenenan la senal que el Bloque B recien
+# arreglo.
+
+DEFAULTS_OBJ = {
+    "coleccion":      {"target": 0.4},
+    "descubrimiento": {"target": 5},
+    "profundidad":    {"target": 0.5},
+    "genero":         {"target": 20},
+}
+
+
+async def _estado_objetivos(intent, st: SessionState) -> Result:
+    estados = await goals.estado(st.room_id)
+    atrasado = next((e for e in estados
+                     if e.get("suficiente") and not e.get("cumplido")), None)
+    if atrasado:
+        st.ofrecer("reproducir_objetivo", "algo para el objetivo")
+    return Result(render.objetivos(estados) +
+                  (render.OFRECER if atrasado else ""),
+                  data={"objetivos": len(estados)})
+
+
+async def _set_objetivo(intent: Intent, st: SessionState, kind: str) -> Result:
+    spec = dict(DEFAULTS_OBJ.get(kind, {}))
+    n = intent.slots.get("n")
+    if n:
+        # Los ratios se declaran en porcentaje y se guardan en 0..1.
+        spec["target"] = (n / 100) if kind in ("coleccion", "profundidad") else n
+    if kind == "genero":
+        g = (intent.slots.get("genero") or "").strip().lower()
+        if not g:
+            return Result(render.no_entendido(), ok=False)
+        spec["genero"], spec["tags"] = g, [g]
+
+    goal = await goals.declarar(kind, spec, room_id=st.room_id)
+    e = await goals.progreso(goal)
+    return Result(render.objetivo_declarado(kind, e), data={"kind": kind})
+
+
+async def _obj_coleccion(i, st):     return await _set_objetivo(i, st, "coleccion")
+async def _obj_descubrimiento(i, st): return await _set_objetivo(i, st, "descubrimiento")
+async def _obj_genero(i, st):        return await _set_objetivo(i, st, "genero")
+async def _obj_profundidad(i, st):   return await _set_objetivo(i, st, "profundidad")
+
+
+ALIAS_OBJ = {
+    "coleccion": "coleccion", "vinilo": "coleccion", "vinilos": "coleccion",
+    "el estante": "coleccion", "mis discos": "coleccion",
+    "descubrimiento": "descubrimiento", "artistas nuevos": "descubrimiento",
+    "descubrir": "descubrimiento",
+    "profundidad": "profundidad", "albumes enteros": "profundidad",
+    "discos enteros": "profundidad",
+}
+
+
+async def _borrar_objetivo(intent: Intent, st: SessionState) -> Result:
+    que = (intent.slots.get("que") or "").strip().lower()
+    kind = ALIAS_OBJ.get(que)
+    if kind is None:
+        # Cualquier otra cosa se interpreta como el genero declarado.
+        activos = await goals.activos(st.room_id)
+        gen = next((g for g in activos if g["kind"] == "genero"), None)
+        kind = "genero" if gen else None
+    if kind is None:
+        return Result(render.objetivo_borrado(que, 0), ok=False)
+    n = await goals.borrar(kind, st.room_id)
+    return Result(render.objetivo_borrado(que, n))
+
+
+async def _reproducir_objetivo(intent: Intent, st: SessionState) -> Result:
+    """La playlist que mas mueve el objetivo mas atrasado. Cero tokens."""
+    if _lanzar_tracks is None:
+        return Result(render.error("el reproductor no esta enganchado"), ok=False)
+
+    e = await goals.mas_atrasado(st.room_id)
+    if not e:
+        return Result(render.sin_objetivo_atrasado(), ok=False)
+
+    tracks = await queries.tracks_para_objetivo(e["kind"], e.get("spec"))
+    nombre = render.ETIQUETA_OBJ.get(e["kind"], e["kind"])
+    if not tracks:
+        return Result(render.sin_material_objetivo(nombre), ok=False)
+
+    resp = await _lanzar_tracks(tracks, f"Objetivo: {nombre}", st.room_id)
+    st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
+    return Result(render.objetivo_playlist(resp, e, len(tracks)),
+                  data={"count": len(tracks), "kind": e["kind"]},
+                  actions=["playlist"])
+
+
 EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "control_play": _play,
     "control_pause": _pause,
@@ -369,6 +463,14 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "reproducir_historial": _reproducir_historial,
     "reproducir_releases": _reproducir_releases,
     "confirmar": _confirmar,
+    # --- H4 ---
+    "estado_objetivos": _estado_objetivos,
+    "set_objetivo_coleccion": _obj_coleccion,
+    "set_objetivo_descubrimiento": _obj_descubrimiento,
+    "set_objetivo_genero": _obj_genero,
+    "set_objetivo_profundidad": _obj_profundidad,
+    "borrar_objetivo": _borrar_objetivo,
+    "reproducir_objetivo": _reproducir_objetivo,
     "rechazar": _rechazar,
     "no_entendido": _no_entendido,
 }

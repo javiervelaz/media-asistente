@@ -191,6 +191,37 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"^(?:efemerides|que se cumple hoy|que paso un dia como hoy|"
         r"aniversarios?|que se festeja hoy|que cumple anos hoy)$")),
 
+    # --- H4: objetivos ---
+
+    ("estado_objetivos", re.compile(
+        r"^(?:como voy|mis objetivos|como vengo|objetivos|"
+        r"como voy con (?:mis )?(?:los )?objetivos|estado de objetivos|"
+        r"como vengo con eso)$")),
+
+    ("borrar_objetivo", re.compile(
+        r"^(?:borra|saca|olvida|cancela|elimina)(?:me|te)?\s+"
+        r"(?:el\s+)?objetivo\s+(?:de\s+)?(?P<que>.+)$")),
+
+    # "quiero escuchar mas de mi coleccion" / "mas vinilo"
+    ("set_objetivo_coleccion", re.compile(
+        r"^(?:quiero\s+)?(?:escuchar\s+)?mas\s+"
+        r"(?:de\s+)?(?:mi\s+)?(?:coleccion|vinilo|vinilos|el estante|"
+        r"mis discos)(?:\s+(?P<n>\d{1,3})\s*%?)?$")),
+
+    ("set_objetivo_descubrimiento", re.compile(
+        r"^(?:quiero\s+)?(?:descubrir|conocer)\s+"
+        r"(?:(?P<n>\d{1,3})\s+)?(?:artistas?|bandas?|cosas?)"
+        r"(?:\s+nuev[oa]s?)?(?:\s+por\s+\w+)?$")),
+
+    ("set_objetivo_profundidad", re.compile(
+        r"^(?:quiero\s+)?(?:escuchar\s+)?(?:mas\s+)?"
+        r"(?:albumes?|discos)\s+enteros?(?:\s+(?P<n>\d{1,3})\s*%?)?$")),
+
+    # "quiero escuchar mas jazz" — va DESPUES de coleccion/profundidad para
+    # que "mas vinilo" y "mas discos enteros" no caigan aca.
+    ("set_objetivo_genero", re.compile(
+        r"^(?:quiero\s+)?escuchar\s+mas\s+(?P<genero>[a-z0-9 \-]{3,30})$")),
+
     # Playlist va ULTIMO: cualquier control o consulta le gana. El prompt
     # que se manda al curador es el texto ORIGINAL, no el normalizado —
     # las tildes y las mayusculas son parte del pedido curatorial.
@@ -211,6 +242,16 @@ def _slots(name: str, m: re.Match) -> dict:
 
     if "artista" in g and g["artista"]:
         return {"artista": g["artista"].strip()}
+
+    if "genero" in g and g["genero"]:
+        return {"genero": g["genero"].strip()}
+
+    if "que" in g and g["que"]:
+        return {"que": g["que"].strip()}
+
+    if name.startswith("set_objetivo"):
+        n = g.get("n")
+        return {"n": int(n)} if n else {}
 
     if "cuando" in g:
         # Puede venir vacio ("que escuche" pelado): la ventana por defecto

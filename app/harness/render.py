@@ -114,6 +114,11 @@ efemérides
 poneme algo que haya escuchado hoy
 (y cuando te ofrezco algo, alcanza con "dale")
 
+*Objetivos*
+cómo voy · quiero escuchar más de mi colección
+quiero descubrir 5 artistas · quiero escuchar más jazz
+quiero escuchar álbumes enteros
+
 *Música nueva* (esto sí usa el curador)
 decime qué querés: "algo tranqui para cocinar", "cumbia santafesina".
 Si no te entiendo, te aviso cuánto sale antes de gastar."""
@@ -313,3 +318,89 @@ def confirmar_gasto(texto: str, tokens: int, entendido: bool) -> str:
         cab = (f"No entendí \"{texto}\" como comando. Puedo mandárselo al "
                f"curador y que arme una playlist, pero eso gasta ({aprox}).")
     return f"{cab}\n¿Lo hago? (dale / no)"
+
+
+# ================================================================ H4: objetivos
+
+def _barra(actual: float, target: float, ancho: int = 10) -> str:
+    if target <= 0:
+        return ""
+    llenos = max(0, min(ancho, round(ancho * actual / target)))
+    return "█" * llenos + "·" * (ancho - llenos)
+
+
+def objetivos(estados: list[dict]) -> str:
+    if not estados:
+        return ("No tenés objetivos activos. Se declaran hablando:\n"
+                "· \"quiero escuchar más de mi colección\"\n"
+                "· \"quiero descubrir 5 artistas\"\n"
+                "· \"quiero escuchar más jazz\"\n"
+                "· \"quiero escuchar álbumes enteros\"")
+
+    lineas = []
+    for e in estados:
+        nombre = ETIQUETA_OBJ.get(e["kind"], e["kind"])
+        if e["kind"] == "genero":
+            g = (e.get("spec") or {}).get("genero", "")
+            nombre = f"escuchar {g}" if g else nombre
+        u = e["unidad"]
+        actual = f"{e['actual']:.0f}{'%' if u == '%' else ''}"
+        target = f"{e['target']:.0f}{'%' if u == '%' else ''}"
+        cola = "" if u == "%" else f" {u}"
+        marca = "  ✓" if e.get("cumplido") else ""
+        lineas.append(f"{_barra(e['actual'], e['target'])}  {nombre}: "
+                      f"{actual} de {target}{cola}{marca}")
+        if not e["suficiente"]:
+            lineas.append(f"    (solo {e['muestra']} escuchas completas en "
+                          f"{e['dias']} días — todavía es ruido, no sesga nada)")
+
+    return "Cómo venís:\n" + "\n".join(lineas)
+
+
+ETIQUETA_OBJ = {
+    "coleccion": "colección en vinilo",
+    "descubrimiento": "artistas nuevos",
+    "genero": "género",
+    "profundidad": "álbumes enteros",
+}
+
+
+def objetivo_declarado(kind: str, e: dict) -> str:
+    nombre = ETIQUETA_OBJ.get(kind, kind)
+    if kind == "genero":
+        nombre = (e.get("spec") or {}).get("genero", nombre)
+    u = e["unidad"]
+    target = f"{e['target']:.0f}{'%' if u == '%' else ''}"
+    cola = "" if u == "%" else f" {u}"
+    txt = f"Anotado: {nombre}, {target}{cola} en {e['dias']} días."
+    if e["suficiente"]:
+        actual = f"{e['actual']:.0f}{'%' if u == '%' else ''}"
+        txt += f" Ahora vas {actual}{cola}."
+    else:
+        txt += (f" Todavía no hay muestra suficiente ({e['muestra']} escuchas "
+                "completas), así que no va a sesgar nada hasta que la haya.")
+    return txt
+
+
+def objetivo_borrado(que: str, n: int) -> str:
+    return (f"Listo, saqué el objetivo de {que}." if n
+            else f"No tenías ningún objetivo de {que}.")
+
+
+def objetivo_playlist(resp: dict, e: dict, n: int) -> str:
+    nombre = ETIQUETA_OBJ.get(e["kind"], e["kind"])
+    ft = resp.get("first_track") or {}
+    linea = f"Para el objetivo más atrasado ({nombre}) — {n} temas."
+    if ft:
+        linea += f"\nArranca: {ft.get('artist')} — {ft.get('title')}"
+    return linea
+
+
+def sin_objetivo_atrasado() -> str:
+    return ("No hay objetivos pendientes. O los cumpliste todos, o no "
+            "declaraste ninguno todavía — mandá 'cómo voy'.")
+
+
+def sin_material_objetivo(nombre: str) -> str:
+    return (f"No encontré material sin escuchar para el objetivo de {nombre}. "
+            "Pedime una playlist normal y el grafo se hidrata solo.")

@@ -254,11 +254,16 @@ def _mover_breakpoint(mensajes: list) -> None:
             ultimo["cache_control"] = {"type": "ephemeral"}
 
 
-async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8) -> dict:
-    mensajes = [{
-        "role": "user",
-        "content": f"{prompt}\n\nArmá una playlist de {n_tracks} tracks.",
-    }]
+async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
+                 nota: str | None = None) -> dict:
+    """`nota` es contexto que inclina la eleccion sin ser parte del pedido:
+    hoy, la linea del objetivo activo. Va en el mensaje de usuario y no en el
+    prompt, porque el prompt tambien alimenta la busqueda por trigram de
+    local_search y ensuciarlo ahi arruinaria el match."""
+    pedido = f"{prompt}\n\nArmá una playlist de {n_tracks} tracks."
+    if nota:
+        pedido += f"\n\n{nota}"
+    mensajes = [{"role": "user", "content": pedido}]
     uso = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
     vistos: dict[str, dict] = {}   # recording_mbid -> lo que el modelo vio
 

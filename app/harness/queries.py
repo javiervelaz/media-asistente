@@ -400,3 +400,123 @@ async def costo_tipico() -> int:
     _COSTO_CACHE["valor"] = valor
     _COSTO_CACHE["hasta"] = ahora_ + timedelta(minutes=COSTO_TTL_MIN)
     return valor
+
+
+# ------------------------------------------------- material para un objetivo
+
+# Colección: discos del estante sin escuchar entero, o no escuchados hace
+# rato. Prioriza lo ya resuelto para que arranque rápido, pero no lo exige.
+SQL_OBJ_COLECCION = """
+SELECT rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
+       rc.length_ms, r.title AS album,
+       (tr.recording_mbid IS NOT NULL) AS listo
+FROM ephemerides e
+JOIN releases   r  ON r.mbid = e.mbid::uuid
+JOIN artists    a  ON a.mbid = r.artist_mbid
+JOIN recordings rc ON rc.release_mbid = r.mbid
+LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+WHERE e.weight = 1 AND e.mbid IS NOT NULL
+  AND COALESCE(tr.fail_count, 0) < 3
+  AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+  AND NOT EXISTS (
+      SELECT 1 FROM play_history ph
+      WHERE ph.recording_mbid = rc.mbid
+        AND ph.started_at > now() - interval '60 days')
+ORDER BY listo DESC, random()
+LIMIT $1
+"""
+
+# Descubrimiento: artistas del grafo que nunca aparecieron en play_history.
+# Un track por artista — la gracia es la variedad, no la profundidad.
+SQL_OBJ_DESCUBRIMIENTO = """
+SELECT DISTINCT ON (a.mbid)
+       rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
+       rc.length_ms, r.title AS album,
+       (tr.recording_mbid IS NOT NULL) AS listo
+FROM artists a
+JOIN releases   r  ON r.artist_mbid = a.mbid
+JOIN recordings rc ON rc.release_mbid = r.mbid
+LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+WHERE COALESCE(tr.fail_count, 0) < 3
+  AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+  AND rc.position <= 5
+  AND NOT EXISTS (
+      SELECT 1 FROM play_history ph WHERE ph.artist_mbid = a.mbid)
+ORDER BY a.mbid, listo DESC, rc.position
+LIMIT $1
+"""
+
+SQL_OBJ_GENERO = """
+SELECT DISTINCT ON (a.mbid, rc.title)
+       rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
+       rc.length_ms, r.title AS album,
+       (tr.recording_mbid IS NOT NULL) AS listo
+FROM artists a
+JOIN releases   r  ON r.artist_mbid = a.mbid
+JOIN recordings rc ON rc.release_mbid = r.mbid
+LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+WHERE a.tags && $2::text[]
+  AND COALESCE(tr.fail_count, 0) < 3
+  AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+  AND rc.position <= 6
+ORDER BY a.mbid, rc.title, listo DESC
+LIMIT $1
+"""
+
+# Profundidad: UN disco, entero. Elige el release con más tracks resueltos
+# entre los que ya te gustan (alguna escucha completa) pero del que no
+# escuchaste el álbum completo.
+SQL_OBJ_PROFUNDIDAD = """
+WITH candidato AS (
+    SELECT rc.release_mbid,
+           count(*) FILTER (WHERE tr.recording_mbid IS NOT NULL) AS listos,
+           count(*) AS total
+    FROM recordings rc
+    LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+    WHERE rc.release_mbid IN (
+        SELECT DISTINCT rc2.release_mbid
+        FROM play_history ph JOIN recordings rc2 ON rc2.mbid = ph.recording_mbid
+        WHERE ph.completed)
+    GROUP BY rc.release_mbid
+    HAVING count(*) BETWEEN 4 AND 20
+    ORDER BY listos DESC, random()
+    LIMIT 1
+)
+SELECT rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
+       rc.length_ms, r.title AS album,
+       (tr.recording_mbid IS NOT NULL) AS listo
+FROM candidato c
+JOIN recordings rc ON rc.release_mbid = c.release_mbid
+JOIN releases   r  ON r.mbid = rc.release_mbid
+JOIN artists    a  ON a.mbid = r.artist_mbid
+LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+WHERE COALESCE(tr.fail_count, 0) < 3
+ORDER BY rc.position NULLS LAST
+LIMIT $1
+"""
+
+
+async def tracks_para_objetivo(kind: str, spec: dict | None = None,
+                               limite: int = 14) -> list[dict]:
+    """La cola que mas mueve un objetivo. Cero tokens: son todos MBIDs
+    concretos que ya estan en la base.
+
+    Este es el caso ideal del sistema — un objetivo declarado en lenguaje
+    natural que se cumple con SQL puro.
+    """
+    spec = spec or {}
+    if kind == "coleccion":
+        rows = await fetch(SQL_OBJ_COLECCION, limite)
+    elif kind == "descubrimiento":
+        rows = await fetch(SQL_OBJ_DESCUBRIMIENTO, limite)
+    elif kind == "genero":
+        tags = [t.lower() for t in (spec.get("tags")
+                                    or [spec.get("genero", "")]) if t]
+        if not tags:
+            return []
+        rows = await fetch(SQL_OBJ_GENERO, limite, tags)
+    elif kind == "profundidad":
+        rows = await fetch(SQL_OBJ_PROFUNDIDAD, limite)
+    else:
+        return []
+    return [dict(r) for r in rows]

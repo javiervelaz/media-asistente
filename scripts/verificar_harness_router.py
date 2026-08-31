@@ -128,6 +128,22 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("no",                          "rechazar", {}),
     ("mejor no",                    "rechazar", {}),
     ("ahora no",                    "rechazar", {}),
+
+    # --- H4: objetivos ---
+    ("cómo voy",                            "estado_objetivos", {}),
+    ("cómo voy con mis objetivos",          "estado_objetivos", {}),
+    ("mis objetivos",                       "estado_objetivos", {}),
+    ("quiero escuchar más de mi colección", "set_objetivo_coleccion", {}),
+    ("más vinilo",                          "set_objetivo_coleccion", {}),
+    ("quiero escuchar más de mi colección 60", "set_objetivo_coleccion", {"n": 60}),
+    ("quiero descubrir 5 artistas",         "set_objetivo_descubrimiento", {"n": 5}),
+    ("descubrir bandas nuevas",             "set_objetivo_descubrimiento", {}),
+    ("quiero escuchar álbumes enteros",     "set_objetivo_profundidad", {}),
+    ("discos enteros",                      "set_objetivo_profundidad", {}),
+    ("quiero escuchar más jazz",            "set_objetivo_genero", {"genero": "jazz"}),
+    ("quiero escuchar más post punk",       "set_objetivo_genero", {"genero": "post punk"}),
+    ("borrame el objetivo de vinilo",       "borrar_objetivo", {"que": "vinilo"}),
+    ("sacá el objetivo de jazz",            "borrar_objetivo", {"que": "jazz"}),
 ]
 
 #: Tienen que caer en no_entendido. Un patron que se coma alguna de estas es
@@ -137,7 +153,7 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
 #: playlist en vez de responder. Es el gasto que H2 elimina: cada una de estas
 #: frases va a aparecer en `SELECT text_in FROM turn_log WHERE stage='fallback'`.
 NEGATIVOS: list[str] = [
-    "cómo voy con mis objetivos",          # H4
+    "ponete a bailar",                     # ni comando ni consulta
     "",
 ]
 

@@ -11,7 +11,8 @@ from pydantic import BaseModel
 
 from app import local_search, player, tracks
 from app.auth import verify_api_key
-from app.harness import executors as harness_exec
+from app.harness import executors as harness_exec, goals
+from app.harness import queries as harness_queries
 from app.harness.chat import responder as harness_responder
 from app.config import settings
 from app.curator import curate
@@ -70,6 +71,7 @@ class PlaylistRequest(BaseModel):
     room_id: str = "main"
     use_curator: bool | None = None   # None = usa el default de config
     use_local: bool | None = None     # None = usa el default de config
+    sesgo: str | None = None          # contexto que inclina, no parte del pedido
 
 
 class DespertadorRequest(BaseModel):
@@ -492,7 +494,8 @@ async def create_playlist(req: PlaylistRequest):
 
     if usar_curador:
         try:
-            data = await curate(req.prompt, req.n_tracks)
+            data = await curate(req.prompt, req.n_tracks,
+                                nota=req.sesgo)
             concept = data.get("concept", "")
             narration = data.get("narration", "")
             metricas = data.get("metrics")
@@ -741,6 +744,43 @@ async def despertador(req: DespertadorRequest):
     return resp
 
 
+# === Objetivos ===
+
+class ObjetivoRequest(BaseModel):
+    room_id: str = "main"
+    n_tracks: int = 14
+    play_now: bool = True
+
+
+@app.get("/objetivos", dependencies=[Depends(verify_api_key)])
+async def listar_objetivos(room_id: str = "main"):
+    return await goals.estado(room_id)
+
+
+@app.post("/playlist/objetivo", dependencies=[Depends(verify_api_key)])
+async def playlist_objetivo(req: ObjetivoRequest):
+    """La playlist que más mueve el objetivo más atrasado. Cero tokens.
+
+    Es el caso ideal del sistema: un objetivo declarado en lenguaje natural
+    que se cumple con SQL puro, porque son MBIDs concretos que ya están en la
+    base. No pasa por el curador ni por una búsqueda en YouTube.
+    """
+    e = await goals.mas_atrasado(req.room_id)
+    if not e:
+        raise HTTPException(404, "no hay objetivos pendientes")
+
+    tracks_ = await harness_queries.tracks_para_objetivo(
+        e["kind"], e.get("spec"), req.n_tracks)
+    if not tracks_:
+        raise HTTPException(422, f"sin material para el objetivo {e['kind']}")
+
+    resp = await _lanzar(tracks_, f"Objetivo: {e['kind']}",
+                         room_id=req.room_id, source="local",
+                         play_now=req.play_now)
+    resp["objetivo"] = {k: e[k] for k in ("kind", "actual", "target", "dias")}
+    return resp
+
+
 # === Harness conversacional ===
 
 async def _harness_playlist(prompt: str, room_id: str = "main") -> dict:
@@ -749,9 +789,23 @@ async def _harness_playlist(prompt: str, room_id: str = "main") -> dict:
     Menos tracks que por API: en una conversacion la cola larga se vuelve
     ruido y cada track de mas es una descarga en un Pi 3B.
     """
+    # El objetivo activo inclina la eleccion del curador. Una linea, no un
+    # dump — y solo si hay muestra suficiente: sesgar con ruido es peor que
+    # no sesgar. Es una preferencia, no una cuota: si el curador arma
+    # playlists peores para cumplir la metrica, se saltean, y los skips
+    # envenenan la senal que alimenta local_search.
+    sesgo = None
+    try:
+        e = await goals.mas_atrasado(room_id)
+        sesgo = goals.linea_para_curador(e) if e else None
+        if sesgo:
+            logger.info("sesgo por objetivo: %s", sesgo)
+    except Exception:
+        logger.exception("no pude leer los objetivos; sigo sin sesgo")
+
     return await create_playlist(PlaylistRequest(
         prompt=prompt, room_id=room_id,
-        n_tracks=settings.harness_n_tracks))
+        n_tracks=settings.harness_n_tracks, sesgo=sesgo))
 
 
 async def _harness_lanzar(tracks_: list[dict], titulo: str,

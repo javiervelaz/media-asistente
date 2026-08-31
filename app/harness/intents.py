@@ -76,7 +76,14 @@ CATALOGO: tuple[Spec, ...] = (
 
     # --- objetivos (H4) ---
     Spec("estado_objetivos", "como viene contra los objetivos de escucha"),
-    Spec("set_objetivo",     "declarar un objetivo de escucha"),
+    Spec("set_objetivo_coleccion",     "escuchar mas la coleccion en vinilo"),
+    Spec("set_objetivo_descubrimiento","descubrir artistas nuevos"),
+    Spec("set_objetivo_genero",        "escuchar mas de un genero"),
+    Spec("set_objetivo_profundidad",   "escuchar albumes enteros"),
+    Spec("borrar_objetivo",            "sacar un objetivo activo"),
+    Spec("reproducir_objetivo",
+         "armar la playlist que mas mueve el objetivo mas atrasado",
+         modelo=None),
 
     # --- lo unico que gasta ---
     Spec("playlist", "armar una playlist nueva a partir de un pedido curatorial",
@@ -104,6 +111,10 @@ IMPLEMENTADOS: set[str] = {
     "nunca_escuchado", "discografia", "relaciones", "efemerides_hoy",
     "reproducir_historial", "reproducir_releases",
     "confirmar", "rechazar",
+    # H4
+    "estado_objetivos", "borrar_objetivo", "reproducir_objetivo",
+    "set_objetivo_coleccion", "set_objetivo_descubrimiento",
+    "set_objetivo_genero", "set_objetivo_profundidad",
 }
 
 
