@@ -149,6 +149,26 @@ async def _playlist(intent: Intent, st: SessionState) -> Result:
     return Result(render.playlist(resp), data=resp, actions=["playlist"])
 
 
+async def _saludo(intent, st: SessionState) -> Result:
+    """Un saludo no es un pedido de musica. Antes caia al fallback y el
+    curador leia "hola charly" como un pedido de Charly Garcia: 19k tokens
+    por decir hola."""
+    try:
+        estado = await player.get_status()
+        t = get_track_at(estado.get("playlist_pos")) if estado.get("mpv_ok") else None
+    except MPVError:
+        t = None
+    return Result(render.saludo(t))
+
+
+async def _ayuda(intent, st) -> Result:
+    return Result(render.ayuda())
+
+
+async def _repreguntar(intent: Intent, st) -> Result:
+    return Result(render.repreguntar(intent.slots.get("texto", "")), ok=False)
+
+
 async def _no_entendido(intent, st) -> Result:
     return Result(render.no_entendido(), ok=False)
 
@@ -166,6 +186,9 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "estado_actual": _estado_actual,
     "estado_cola": _estado_cola,
     "playlist": _playlist,
+    "saludo": _saludo,
+    "ayuda": _ayuda,
+    "repreguntar": _repreguntar,
     "no_entendido": _no_entendido,
 }
 

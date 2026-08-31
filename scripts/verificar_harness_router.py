@@ -72,6 +72,16 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("poné algo de los discos que tengo en vinilo",     "playlist", None),
     ("quiero escuchar algo de jazz modal",              "playlist", None),
     ("tirame cumbia santafesina",                       "playlist", None),
+
+    # El caso que costo 19k tokens: el normalizador come "charly" como
+    # vocativo, queda "hola", ningun patron matcheaba y el curador leia el
+    # texto original como un pedido de Charly Garcia.
+    ("hola",                        "saludo", {}),
+    ("hola charly",                 "saludo", {}),
+    ("che charly, buenas",          "saludo", {}),
+    ("buen día",                    "saludo", {}),
+    ("ayuda",                       "ayuda", {}),
+    ("qué sabés hacer",             "ayuda", {}),
 ]
 
 #: Tienen que caer en no_entendido. Un patron que se coma alguna de estas es
@@ -89,6 +99,20 @@ NEGATIVOS: list[str] = [
     "qué me salteo siempre",
     "",
 ]
+
+
+#: Textos que NO matchean ningun patron y son demasiado cortos como para
+#: mandarlos al curador. Tienen que terminar en `repreguntar`, no en playlist.
+CORTOS: list[str] = ["gracias", "ok", "dale?", "mmm", "asdf", "🎵"]
+
+
+def _fallback(texto: str) -> str:
+    """Reproduce la decision de chat._resolver_fallback sin importar config."""
+    from app.harness.router import normalizar
+    it = etapa1(texto)
+    if it:
+        return it.name
+    return "repreguntar" if len(normalizar(texto).split()) < 2 else "playlist"
 
 
 def main() -> int:
@@ -119,6 +143,17 @@ def main() -> int:
             fp += 1
             print(f"  FALSO POSITIVO  {frase!r} -> {it.name}")
     print(f"  {len(NEGATIVOS) - fp}/{len(NEGATIVOS)} caen al fallback (esperado)")
+
+    print(f"\n--- cortos que no deben llegar al curador ({len(CORTOS)}) ---")
+    fugas = 0
+    for t in CORTOS:
+        got = _fallback(t)
+        if got != "repreguntar":
+            fugas += 1
+            print(f"  FUGA  {t!r} -> {got}  (19k tokens por nada)")
+    print(f"  {len(CORTOS) - fugas}/{len(CORTOS)} repreguntan en vez de gastar")
+    if fugas:
+        fallos.append("cortos que llegan al curador")
 
     print("\n--- normalizador ---")
     for f in ["Che Charly, pasala porfa", "¿Qué suena?", "SUBILE!!"]:

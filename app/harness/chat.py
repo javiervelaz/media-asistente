@@ -14,7 +14,7 @@ import logging
 from app.config import settings
 from app.harness import executors, session
 from app.harness.intents import FALLBACK, Intent, Result
-from app.harness.router import rutear
+from app.harness.router import normalizar, rutear
 from app.harness.telemetry import Cronometro, log_turn
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,15 @@ def _resolver_fallback(intent: Intent, text: str) -> Intent:
         return intent
     if not settings.harness_fallback_playlist:
         return intent
+
+    # Guarda de longitud. "hola", "gracias", "ok", un typo: nada de eso es un
+    # pedido de musica, pero todos cuestan lo mismo que uno. Repreguntar sale
+    # cero y el usuario confirma en un turno.
+    palabras = len(normalizar(text).split())
+    if palabras < settings.harness_min_palabras_playlist:
+        return Intent(name="repreguntar", slots={"texto": text.strip()},
+                      confidence=0.0, stage=FALLBACK)
+
     return Intent(name="playlist", slots={"prompt": text},
                   confidence=0.0, stage=FALLBACK)
 

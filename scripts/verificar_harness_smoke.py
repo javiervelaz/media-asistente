@@ -71,8 +71,9 @@ executors.set_hooks(crear_playlist=fake_playlist)
 
 
 async def main():
-    frases = ["pasala", "che charly bajale 20", "qué suena", "qué sigue",
-              "poné el volumen en 40", "de nuevo",
+    frases = ["hola charly", "pasala", "che charly bajale 20", "qué suena",
+              "qué sigue", "poné el volumen en 40", "de nuevo", "gracias",
+              "ayuda",
               "armá una playlist de post-punk británico de 1980",
               "qué escuché la semana pasada"]
     print("=" * 66)
@@ -91,7 +92,7 @@ async def main():
     for e in caros:
         print(f"  gasto: {e['intent']} (stage={e['stage']}) "
               f"in={e['input_tokens']} cache={e['cached_tokens']} out={e['output_tokens']}")
-    assert gratis == 6, gratis
+    assert gratis == 9, gratis
     assert ("register_advance", "next") in LLAMADAS, "el skip por chat no se registro"
     assert ESTADO["volume"] == 40
     print("\nOK — el skip por chat registra feedback igual que /control/next")

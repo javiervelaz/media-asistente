@@ -100,6 +100,14 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"^(?:que sigue|que viene|la cola|que falta|que queda|"
         r"que hay despues|lo que viene)$")),
 
+    ("saludo", re.compile(
+        r"^(?:hola|holis|buenas|buenas tardes|buenas noches|buen dia|"
+        r"hey|que tal|como andas|como va|ola)$")),
+
+    ("ayuda", re.compile(
+        r"^(?:ayuda|help|que sabes hacer|que podes hacer|comandos|"
+        r"opciones|que hago|menu)$")),
+
     # Playlist va ULTIMO: cualquier control o consulta le gana. El prompt
     # que se manda al curador es el texto ORIGINAL, no el normalizado —
     # las tildes y las mayusculas son parte del pedido curatorial.

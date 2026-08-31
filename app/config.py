@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # mas barato que adivinar.
     harness_fallback_playlist: bool = True
     harness_n_tracks: int = 14
+    # Palabras minimas para mandar un texto no reconocido al curador. Un
+    # mensaje de una sola palabra que no matcheo ningun patron casi nunca es
+    # un pedido curatorial, y siempre cuesta lo mismo que uno real.
+    harness_min_palabras_playlist: int = 2
 
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 

@@ -96,9 +96,42 @@ def playlist(resp: dict) -> str:
     return linea
 
 
+AYUDA = """Manejo esto sin gastar un token:
+
+· pasala · anterior · pausá · seguí · de nuevo · basta
+· subile / bajale (o "poné el volumen en 40")
+· qué suena · qué sigue
+
+Y para armar música, decime qué querés escuchar:
+"poneme algo tranquilo para cocinar", "cumbia santafesina",
+"post-punk británico del 80"."""
+
+
+def saludo(track: dict | None) -> str:
+    if track:
+        return (f"Acá andamos. Ahora suena {track['artist']} — {track['title']}.\n"
+                "Decime qué querés escuchar, o mandá 'ayuda'.")
+    return "Acá andamos. Decime qué querés escuchar, o mandá 'ayuda'."
+
+
+def ayuda() -> str:
+    return AYUDA
+
+
 def no_entendido() -> str:
     return ("No te entendi. Por ahora manejo los controles (pausa, siguiente, "
             "volumen) y te digo que suena o que sigue.")
+
+
+def repreguntar(texto: str) -> str:
+    """Para lo que no se entendio y es demasiado corto como para adivinar.
+
+    Repreguntar cuesta cero. Adivinar cuesta una sesion de curador y una
+    playlist que nadie pidio.
+    """
+    return (f"No sé qué hacer con \"{texto}\". Si es un pedido de música "
+            "decímelo un poco más largo (\"poné algo tranqui\", "
+            "\"cumbia santafesina\"); si no, mandá 'ayuda'.")
 
 
 def error(detalle: str) -> str:

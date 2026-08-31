@@ -75,6 +75,9 @@ CATALOGO: tuple[Spec, ...] = (
          modelo="curator"),
 
     # --- meta ---
+    Spec("saludo", "un saludo, sin pedido concreto"),
+    Spec("ayuda",  "que sabe hacer el bot"),
+    Spec("repreguntar",  "demasiado corto para adivinar: se pide confirmacion"),
     Spec("no_entendido", "no se pudo clasificar el pedido"),
 )
 
@@ -87,7 +90,7 @@ IMPLEMENTADOS: set[str] = {
     "control_play", "control_pause", "control_next", "control_prev",
     "control_stop", "control_replay", "control_vol_up", "control_vol_down",
     "control_vol_set", "estado_actual", "estado_cola",
-    "playlist",
+    "playlist", "saludo", "ayuda", "repreguntar",
 }
 
 
