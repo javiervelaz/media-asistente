@@ -39,6 +39,34 @@ SIM_ARTISTA = 0.55
 SIM_ALBUM = 0.45
 SEPARADORES = re.compile(r"\s+[—–-]\s+|\s*[;|]\s*|\s*,\s*")
 
+#: Sufijos de edicion que traen los exports de streaming y MusicBrainz no
+#: tiene en el titulo del release-group: "(Remastered 2009)", "[Deluxe]",
+#: "(with Bonus Tracks)". Son la causa de la mayoria de los no-matcheos.
+_SUFIJO_EDICION = re.compile(
+    r"\s*[\(\[][^\)\]]*("
+    r"remaster|deluxe|expanded|edition|edicion|bonus|anniversary|"
+    r"reissue|mono|stereo|complete|collection|version|remix|"
+    r"\d{4}"
+    r")[^\)\]]*[\)\]]\s*", re.IGNORECASE)
+_COLA_EDICION = re.compile(
+    r"\s*[-–—]\s*(remaster|deluxe|expanded|bonus|reissue)[^\n]*$",
+    re.IGNORECASE)
+
+
+def _limpiar_album(album: str) -> str:
+    """Titulo sin adornos de edicion y con espacios normalizados."""
+    t = _SUFIJO_EDICION.sub(" ", album or "")
+    t = _COLA_EDICION.sub("", t)
+    return re.sub(r"\s+", " ", t).strip(" .-–—")
+
+
+def _limpiar_artista(artista: str) -> str:
+    """Primer artista de un credito compartido: "Buddy Holly & The Crickets"
+    matchea mejor como "Buddy Holly"."""
+    t = re.split(r"\s+(?:&|y|feat\.?|featuring|with|con)\s+", artista or "",
+                 maxsplit=1, flags=re.IGNORECASE)[0]
+    return re.sub(r"\s+", " ", t).strip()
+
 
 def _parsear(path: Path) -> list[tuple[str, str]]:
     texto = path.read_text(encoding="utf-8", errors="replace")
@@ -68,9 +96,28 @@ def _parsear(path: Path) -> list[tuple[str, str]]:
 
 
 async def _buscar(artista: str, album: str) -> dict | None:
-    """El disco en ephemerides, por similitud de artista y título."""
+    """El disco en ephemerides, por similitud de artista y titulo.
+
+    Tres intentos, del mas estricto al mas laxo: como vino, sin sufijos de
+    edicion, y ademas con el artista principal de un credito compartido. La
+    lista viene de un export de streaming y la base de MusicBrainz: los
+    titulos no coinciden literalmente casi nunca.
+    """
     if not album:
         return None
+
+    for a, t in ((artista, album),
+                 (artista, _limpiar_album(album)),
+                 (_limpiar_artista(artista), _limpiar_album(album))):
+        if not t:
+            continue
+        row = await _buscar_exacto(a, t)
+        if row:
+            return row
+    return None
+
+
+async def _buscar_exacto(artista: str, album: str) -> dict | None:
     return await fetchrow(
         """
         SELECT id, artist, album, weight, mbid,
