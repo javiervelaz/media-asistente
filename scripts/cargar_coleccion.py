@@ -78,7 +78,7 @@ async def _buscar(artista: str, album: str) -> dict | None:
         FROM ephemerides
         WHERE artist % $1 AND album % $2
           AND similarity(artist, $1) >= $3 AND similarity(album, $2) >= $4
-        ORDER BY sa + sb DESC
+        ORDER BY similarity(artist, $1) + similarity(album, $2) DESC
         LIMIT 1
         """, artista, album, SIM_ARTISTA, SIM_ALBUM)
 
@@ -140,11 +140,35 @@ async def main() -> None:
             for a in sin_album[:10]:
                 print(f"  {a!r}")
 
+        # Con mil discos, 20 líneas en pantalla no alcanzan para revisar nada.
+        reporte = path.with_name(path.stem + "_revisar.txt")
+        with reporte.open("w", encoding="utf-8") as f:
+            f.write("# Revisá los matches dudosos antes de --aplicar.\n")
+            f.write("# Formato: SIMILITUD | lo que pediste | lo que encontré\n")
+            f.write(f"# {len(encontrados)} encontrados, {len(faltantes)} faltan\n\n")
+            f.write("## ENCONTRADOS (se marcarán weight=1)\n")
+            for artista, album, row in sorted(
+                    encontrados, key=lambda x: x[2]["sa"] + x[2]["sb"]):
+                sim = (row["sa"] + row["sb"]) / 2
+                dudoso = "  <-- REVISAR" if sim < 0.75 else ""
+                f.write(f"{sim:.2f} | {artista} — {album}\n")
+                f.write(f"     | {row['artist']} — {row['album']}"
+                        f" (w{row['weight']}){dudoso}\n")
+            f.write("\n## NO ESTÁN EN LA BASE\n")
+            for artista, album, _ in faltantes:
+                f.write(f"{artista} — {album}\n")
+            if sin_album:
+                f.write("\n## SIN ÁLBUM (no pude separar la línea)\n")
+                for a in sin_album:
+                    f.write(f"{a}\n")
+        print(f"\nReporte completo en {reporte.name} "
+              "(ordenado por similitud: los dudosos arriba)")
+
         if not aplicar:
             print()
             print("=" * 70)
             print("DRY RUN — no se escribió nada.")
-            print("Revisá los matches de arriba: la búsqueda es por similitud y")
+            print(f"Revisá {reporte.name}: la búsqueda es por similitud y")
             print("un disco mal matcheado queda marcado como tuyo para siempre.")
             print("Si están bien, repetí con --aplicar")
             return
