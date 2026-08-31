@@ -213,6 +213,18 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"^(?:efemerides|que se cumple hoy|que paso un dia como hoy|"
         r"aniversarios?|que se festeja hoy|que cumple anos hoy)$")),
 
+    # Pedir la coleccion directo, sin pasar por objetivos ni por un listado.
+    # Va antes de `playlist` porque "pone algo de mi coleccion" matchea el
+    # patron generico de pedido, y ahi terminaba en el curador — que ni
+    # siquiera sabe que tenes en el estante.
+    ("reproducir_coleccion", re.compile(
+        r"^(?:pone(?:me|le|lo|la)?|tirame|dame|quiero escuchar|"
+        r"reproduci(?:r|me)?|escuchar)?\s*"
+        r"(?:algo|temas?|musica|un poco)?\s*"
+        r"(?:de\s+|del\s+|de\s+la\s+)?"
+        r"(?:un|una|mi|mis|el|los|la)?\s*"
+        r"(?:coleccion|vinilos?|estante|discos)$")),
+
     # --- H4: objetivos ---
 
     ("estado_objetivos", re.compile(

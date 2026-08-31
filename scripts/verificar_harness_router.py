@@ -134,6 +134,13 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("ahora no",                    "rechazar", {}),
 
     # --- H4: objetivos ---
+    # la colección, directo y sin curador
+    ("poné algo de mi colección",           "reproducir_coleccion", {}),
+    ("algo de mi colección",                "reproducir_coleccion", {}),
+    ("poneme un vinilo",                    "reproducir_coleccion", {}),
+    ("dame algo del estante",               "reproducir_coleccion", {}),
+    ("mis discos",                          "reproducir_coleccion", {}),
+
     ("cómo voy",                            "estado_objetivos", {}),
     ("cómo voy con mis objetivos",          "estado_objetivos", {}),
     ("mis objetivos",                       "estado_objetivos", {}),

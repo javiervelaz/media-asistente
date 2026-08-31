@@ -130,6 +130,9 @@ efemérides
 poneme algo que haya escuchado hoy
 (y cuando te ofrezco algo, alcanza con "dale")
 
+*Tu colección* (gratis, sale de la base)
+poné algo de mi colección · qué tengo en vinilo sin escuchar
+
 *Objetivos*
 cómo voy · quiero escuchar más de mi colección
 quiero descubrir 5 artistas · quiero escuchar más jazz
@@ -239,9 +242,30 @@ def salteados(rows: list[dict], dias: int) -> str:
             "Esto ya pesa en el ranking local: cada skip resta.")
 
 
-def nunca_escuchado(rows: list[dict], ofrecible: bool = False) -> str:
+def coleccion_vacia(est: dict) -> str:
+    """Por que no hay nada que poner del estante. Cada caso tiene un arreglo
+    distinto, así que decir "escuchaste todo" en los cuatro es inútil."""
+    if not est.get("del_estante"):
+        return ("No tengo tu colección cargada: no hay discos con `weight = 1` "
+                "en `ephemerides`. Hasta que los cargues, no puedo distinguir "
+                "tu estante del resto de la base.")
+    if not est.get("con_mbid"):
+        return (f"Tengo {est['del_estante']} discos marcados como tuyos, pero "
+                "ninguno con `mbid` de MusicBrainz, así que no puedo llegar a "
+                "sus temas. Falta hidratarlos.")
+    if not est.get("con_tracklist"):
+        return (f"Tus {est['con_mbid']} discos tienen mbid pero ninguno tiene "
+                "tracklist cargada en `recordings`. Pedime una playlist con "
+                "alguno de esos artistas y se hidrata solo.")
+    return None
+
+
+def nunca_escuchado(rows: list[dict], ofrecible: bool = False,
+                    est: dict | None = None) -> str:
     if not rows:
-        return VACIO["nunca_escuchado"]
+        # "Escuchaste todo" solo se puede afirmar si HAY colección cargada.
+        problema = coleccion_vacia(est or {})
+        return problema or VACIO["nunca_escuchado"]
     cuerpo = "\n".join(
         f"· {r['artist']} — {r['album']}" + (f" ({r['anio']})" if r["anio"] else "")
         for r in rows[:12])
@@ -420,3 +444,11 @@ def sin_objetivo_atrasado() -> str:
 def sin_material_objetivo(nombre: str) -> str:
     return (f"No encontré material sin escuchar para el objetivo de {nombre}. "
             "Pedime una playlist normal y el grafo se hidrata solo.")
+
+
+def coleccion(resp: dict, n: int) -> str:
+    ft = resp.get("first_track") or {}
+    linea = f"De tu colección — {n} temas."
+    if ft:
+        linea += f"\nArranca: {ft.get('artist')} — {ft.get('title')}"
+    return linea

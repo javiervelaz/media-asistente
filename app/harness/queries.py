@@ -207,6 +207,31 @@ async def salteados(dias: int = 90) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def estado_coleccion() -> dict:
+    """Por que no hay material del estante, cuando no lo hay.
+
+    Sin esto, `nunca_escuchado` devolviendo cero se renderiza como
+    "escuchaste todo lo que tenes en vinilo" — una conclusion que el codigo
+    no puede sacar: cero filas tambien significa que no hay discos con
+    weight=1, o que los hay pero sin `mbid`, o con `mbid` y sin tracklist
+    cargada. Son cuatro estados distintos y tres de ellos son un problema.
+    """
+    row = await fetchrow(
+        """
+        SELECT
+          count(*) FILTER (WHERE weight = 1)                      AS del_estante,
+          count(*) FILTER (WHERE weight = 1 AND mbid IS NOT NULL) AS con_mbid,
+          count(*) FILTER (
+              WHERE weight = 1 AND mbid IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM recordings rc
+                  WHERE rc.release_mbid = ephemerides.mbid::uuid)
+          ) AS con_tracklist
+        FROM ephemerides
+        """)
+    return dict(row) if row else {"del_estante": 0, "con_mbid": 0,
+                                  "con_tracklist": 0}
+
+
 async def nunca_escuchado(limite: int = LIMITE) -> list[dict]:
     """Discos de la coleccion en vinilo (weight=1) que nunca sonaron enteros.
 

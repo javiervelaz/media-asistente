@@ -246,10 +246,12 @@ async def _salteados(intent, st) -> Result:
 
 async def _nunca_escuchado(intent, st: SessionState) -> Result:
     rows = await queries.nunca_escuchado()
+    est = await queries.estado_coleccion() if not rows else None
     mbids = [r["mbid"] for r in rows[:6] if r.get("mbid")]
     if mbids:
         st.ofrecer("reproducir_releases", "los del estante", mbids=mbids)
-    return Result(render.nunca_escuchado(rows, ofrecible=bool(mbids)),
+    return Result(render.nunca_escuchado(rows, ofrecible=bool(mbids), est=est),
+                  ok=bool(rows or not est or est.get("con_tracklist")),
                   data={"count": len(rows)})
 
 
@@ -427,6 +429,25 @@ async def _borrar_objetivo(intent: Intent, st: SessionState) -> Result:
     return Result(render.objetivo_borrado(que, n))
 
 
+async def _reproducir_coleccion(intent, st: SessionState) -> Result:
+    """Discos del estante que no sonaron hace rato. Cero tokens: son MBIDs
+    concretos de `ephemerides.weight = 1`, no hay nada que curar."""
+    if _lanzar_tracks is None:
+        return Result(render.error("el reproductor no esta enganchado"), ok=False)
+
+    tracks = await queries.tracks_para_objetivo("coleccion")
+    if not tracks:
+        est = await queries.estado_coleccion()
+        return Result(render.coleccion_vacia(est)
+                      or render.sin_material_objetivo("colección en vinilo"),
+                      ok=False)
+
+    resp = await _lanzar_tracks(tracks, "De tu colección", st.room_id)
+    st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
+    return Result(render.coleccion(resp, len(tracks)),
+                  data={"count": len(tracks)}, actions=["playlist"])
+
+
 async def _reproducir_objetivo(intent: Intent, st: SessionState) -> Result:
     """La playlist que mas mueve el objetivo mas atrasado. Cero tokens."""
     if _lanzar_tracks is None:
@@ -439,7 +460,9 @@ async def _reproducir_objetivo(intent: Intent, st: SessionState) -> Result:
     tracks = await queries.tracks_para_objetivo(e["kind"], e.get("spec"))
     nombre = render.ETIQUETA_OBJ.get(e["kind"], e["kind"])
     if not tracks:
-        return Result(render.sin_material_objetivo(nombre), ok=False)
+        detalle = (render.coleccion_vacia(await queries.estado_coleccion())
+                   if e["kind"] == "coleccion" else None)
+        return Result(detalle or render.sin_material_objetivo(nombre), ok=False)
 
     resp = await _lanzar_tracks(tracks, f"Objetivo: {nombre}", st.room_id)
     st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
@@ -484,6 +507,7 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "set_objetivo_profundidad": _obj_profundidad,
     "borrar_objetivo": _borrar_objetivo,
     "reproducir_objetivo": _reproducir_objetivo,
+    "reproducir_coleccion": _reproducir_coleccion,
     "rechazar": _rechazar,
     "no_entendido": _no_entendido,
 }

@@ -151,6 +151,37 @@ async def _guarda() -> list[str]:
     return fallos
 
 
+async def _coleccion() -> list[str]:
+    """De donde sale el material del estante, y por que puede no haber."""
+    print()
+    print("=" * 66)
+    print("ESTADO DE LA COLECCIÓN (weight = 1)")
+    print("=" * 66)
+    est = await q.estado_coleccion()
+    print(f"  discos marcados como tuyos : {est['del_estante']}")
+    print(f"  …con mbid de MusicBrainz   : {est['con_mbid']}")
+    print(f"  …con tracklist en recordings: {est['con_tracklist']}")
+
+    rows = await fetch(
+        "SELECT weight, count(*) AS n, count(mbid) AS con_mbid "
+        "FROM ephemerides GROUP BY weight ORDER BY weight")
+    print("\n  por weight:")
+    for r in rows:
+        print(f"    weight={r['weight']}: {r['n']:5} filas, "
+              f"{r['con_mbid']:5} con mbid")
+
+    from app.harness import render
+    problema = render.coleccion_vacia(est)
+    print()
+    if problema:
+        print("  Sin material, y el bot ahora dice por qué:")
+        print(f"    {problema}")
+    else:
+        print("  ok  hay colección cargada con tracklist: el bot puede "
+              "distinguir\n      \"escuchaste todo\" de \"no hay datos\".")
+    return []
+
+
 async def _material() -> list[str]:
     print()
     print("=" * 66)
@@ -247,6 +278,7 @@ async def main() -> None:
         fallos += await _ciclo()
         fallos += await _derivacion()
         fallos += await _guarda()
+        fallos += await _coleccion()
         fallos += await _material()
 
         print()

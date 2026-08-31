@@ -170,6 +170,13 @@ ch "qué discos tengo de Killing Joke"
 ch "quién tocó con Killing Joke"
 ch "poneme algo que haya escuchado hoy"
 
+git pull && systemctl --user restart media-api
+API=$(grep ^API_KEY .env | cut -d= -f2)
+curl -s -X POST localhost:8000/chat -H "X-API-Key: $API" -H "Content-Type: application/json" \
+  -d '{"text":"Pone the Beatles","session_id":"cli"}' | jq -r .reply
+sleep 5
+curl -s localhost:8000/status -H "X-API-Key: $API" | jq '{now_playing, paused, position_sec, playlist_count}'
+
 capacidad del disco rasp
 df -h / 
 
