@@ -27,8 +27,30 @@ _RUIDO = re.compile(
     r"|[\s,]*\b(por favor|porfa|porfi|che|charly|gracias|nomas|un cachito)$"
 )
 
+#: Verbos con los que se pide musica. Se sacan del prompt antes de mandarlo:
+#: `local_search` hace trigram contra `artists.name`, y "pone the beatles"
+#: matchea peor que "the beatles" — tanto que devolvia a John Lennon por el
+#: grafo de relaciones en vez de a los Beatles.
+_VERBO_PEDIDO = re.compile(
+    r"^\s*(?:pon[eé](?:me|le|lo|la)?|tira(?:me)?|dame|reproduc[ií](?:r|me)?|"
+    r"busca(?:me)?|arma(?:me)?|son[aá](?:me)?|quiero\s+escuchar|"
+    r"quiero\s+o[ií]r|tengo\s+ganas\s+de|escuchar)\s+"
+    r"(?:algo\s+de\s+|un\s+poco\s+de\s+|musica\s+de\s+|m[uú]sica\s+de\s+)?",
+    re.IGNORECASE)
+
 _ESPACIOS = re.compile(r"\s+")
 _PUNTUACION = re.compile(r"[^\w\s]")
+
+
+def sin_verbo(text: str) -> str:
+    """Saca el verbo de pedido conservando tildes y mayusculas.
+
+    Se aplica al texto ORIGINAL porque el resultado va al curador y a
+    `local_search`: el normalizado perderia los acentos de los nombres.
+    """
+    limpio = _VERBO_PEDIDO.sub("", text or "", count=1).strip()
+    # Si el verbo era todo el mensaje, no hay pedido que mandar.
+    return limpio or (text or "").strip()
 
 
 def normalizar(text: str) -> str:
@@ -226,8 +248,10 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     # que se manda al curador es el texto ORIGINAL, no el normalizado —
     # las tildes y las mayusculas son parte del pedido curatorial.
     ("playlist", re.compile(
-        r"^(?:pone(?:me|le)?|arma(?:me)?|tira(?:me)?|dame|sona(?:me)?|"
-        r"quiero escuchar|quiero oir|tengo ganas de|algo de)\s+(?P<libre>.{3,})$")),
+        r"^(?:pone(?:me|le|lo|la)?|arma(?:me)?|tira(?:me)?|dame|"
+        r"sona(?:me)?|reproduci(?:r|me)?|reproduce|busca(?:me)?|"
+        r"quiero escuchar|quiero oir|tengo ganas de|escuchar|algo de)"
+        r"\s+(?P<libre>.{3,})$")),
 
     # --- todavia sin ejecutor (H2/H4): se dejan comentados a proposito.
     # Un patron que matchea un intent sin ejecutor es peor que no matchear:
@@ -275,8 +299,12 @@ def etapa1(text: str) -> Intent | None:
     for name, pat in PATRONES:
         m = pat.match(n)
         if m:
-            return Intent(name=name, slots=_slots(name, m),
-                          confidence=1.0, stage=REGEX)
+            slots = _slots(name, m)
+            if name == "playlist":
+                # El prompt sale del texto ORIGINAL sin el verbo: el
+                # normalizado perderia las tildes de los nombres propios.
+                slots["prompt"] = sin_verbo(text)
+            return Intent(name=name, slots=slots, confidence=1.0, stage=REGEX)
     return None
 
 
@@ -290,6 +318,4 @@ def rutear(text: str) -> Intent:
     if it is None:
         return Intent(name="no_entendido", slots={},
                       confidence=0.0, stage=FALLBACK)
-    if it.name == "playlist":
-        it.slots["prompt"] = (text or "").strip()
     return it

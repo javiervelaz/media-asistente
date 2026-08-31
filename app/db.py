@@ -1,5 +1,7 @@
 """Pool asyncpg contra Neon"""
+import json
 import logging
+
 import asyncpg
 
 from app.config import settings
@@ -7,6 +9,16 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
+
+
+async def _init_conn(conn: asyncpg.Connection) -> None:
+    """Sin esto, asyncpg entrega `jsonb` como str y todo el codigo que hace
+    `row["spec"].get(...)` revienta con AttributeError. Se registra por
+    conexion porque el pool las abre bajo demanda."""
+    await conn.set_type_codec(
+        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    await conn.set_type_codec(
+        "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
 async def init_pool() -> asyncpg.Pool:
@@ -19,6 +31,7 @@ async def init_pool() -> asyncpg.Pool:
             command_timeout=30,
             statement_cache_size=0, 
             max_inactive_connection_lifetime=30.0,   # obligatorio con el pooler de Neon
+            init=_init_conn,
         )
         logger.info("pool de Neon inicializado")
     return _pool

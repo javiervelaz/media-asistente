@@ -80,6 +80,10 @@ POSITIVOS: list[tuple[str, str, dict | None]] = [
     ("quiero escuchar algo de jazz modal",              "playlist", None),
     ("tirame cumbia santafesina",                       "playlist", None),
     ("poné algo tranquilo para la cena",                "playlist", None),
+    # verbos que faltaban — caian al freno de gasto en vez de ser pedidos
+    ("Reproducir talking heads",                        "playlist", {"prompt": "talking heads"}),
+    ("Pone the Beatles",                                "playlist", {"prompt": "the Beatles"}),
+    ("buscame Café Tacvba",                             "playlist", {"prompt": "Café Tacvba"}),
 
     # El caso que costo 19k tokens: el normalizador come "charly" como
     # vocativo, queda "hola", ningun patron matcheaba y el curador leia el

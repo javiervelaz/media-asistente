@@ -55,6 +55,12 @@ def estado_actual(st: dict, track: dict | None) -> str:
         linea += "  [pausado]"
     if razon:
         linea += f"\n{razon}"
+    # `is False` a propósito: None significa "no pude saberlo" y no justifica
+    # alarmar. Va al final para no partir el bloque del tema.
+    if not st.get("paused") and st.get("salida_ok") is False:
+        linea += ("\n\n⚠ Estoy reproduciendo pero el audio no llega a "
+                  "ninguna salida. Revisá el sink por defecto:\n"
+                  "  wpctl status | grep -A5 Sinks")
     return linea
 
 
@@ -83,13 +89,23 @@ def estado_cola(st: dict, tracks: list[dict], pos: int | None,
 
 
 def playlist(resp: dict) -> str:
+    """`queued` es solo lo que YA se encolo; el resto llega en background.
+
+    Mostrar solo `queued` decia "1 en cola" cuando venian 13 mas en camino:
+    parecia que el sistema no habia encontrado nada. `pending` es lo que
+    falta resolver.
+    """
     titulo = resp.get("title") or "Playlist"
     ft = resp.get("first_track") or {}
     queued = resp.get("queued") or 0
+    pending = resp.get("pending") or 0
     linea = f"{titulo}\n"
     if ft:
         linea += f"Suena: {ft.get('artist')} — {ft.get('title')}\n"
-    linea += f"{queued} en cola."
+    if pending:
+        linea += f"{queued + pending} temas ({pending} bajando todavía)."
+    else:
+        linea += f"{queued} en cola."
     m = resp.get("metrics") or {}
     if m.get("libres"):
         linea += f"  ({m['libres']} sin verificar)"

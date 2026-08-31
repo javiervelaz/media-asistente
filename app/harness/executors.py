@@ -8,6 +8,7 @@ que alimenta local_search quedaria a medias segun por donde entraste.
 `main.py` inyecta los cancelables en el startup para no importar main desde
 aca (ciclo de imports).
 """
+import asyncio
 import logging
 from typing import Awaitable, Callable
 
@@ -116,6 +117,10 @@ async def _vol_set(intent: Intent, st) -> Result:
 
 async def _estado_actual(intent, st: SessionState) -> Result:
     estado = await player.get_status()
+    # mpv puede estar "reproduciendo" contra la nada: sin esto el bot dice
+    # "Suena: X" con total confianza mientras no sale un sonido.
+    if estado.get("mpv_ok") and not estado.get("paused"):
+        estado["salida_ok"] = await asyncio.to_thread(player.salida_activa)
     t = get_track_at(estado.get("playlist_pos")) if estado.get("mpv_ok") else None
     if t:
         st.tocar(last_artist=t.get("artist"),
@@ -381,7 +386,15 @@ async def _set_objetivo(intent: Intent, st: SessionState, kind: str) -> Result:
 
     goal = await goals.declarar(kind, spec, room_id=st.room_id)
     e = await goals.progreso(goal)
-    return Result(render.objetivo_declarado(kind, e), data={"kind": kind})
+
+    # "quiero escuchar mas jazz" puede ser un objetivo o un pedido para ahora.
+    # No hace falta elegir: se declara y se ofrece ponerlo.
+    ofrecer = not e.get("cumplido")
+    if ofrecer:
+        st.ofrecer("reproducir_objetivo", "algo para ese objetivo")
+    return Result(render.objetivo_declarado(kind, e)
+                  + (render.OFRECER if ofrecer else ""),
+                  data={"kind": kind})
 
 
 async def _obj_coleccion(i, st):     return await _set_objetivo(i, st, "coleccion")

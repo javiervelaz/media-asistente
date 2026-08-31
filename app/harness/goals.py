@@ -8,6 +8,7 @@ Regla de datos: **el progreso no se almacena, se deriva.** Un contador se
 desincroniza de `play_history` en cuanto algo falla a mitad de camino y
 despues no hay forma de saber cual de los dos tiene razon.
 """
+import json
 import logging
 
 from app.db import execute, fetch, fetchrow
@@ -20,6 +21,23 @@ logger = logging.getLogger(__name__)
 MUESTRA_MINIMA = 20
 
 TIPOS = ("coleccion", "descubrimiento", "genero", "profundidad")
+
+
+def _spec(goal: dict) -> dict:
+    """`spec` como dict, venga como venga.
+
+    El pool registra un codec para jsonb, pero un script que arme su propio
+    pool no lo tiene — y ahi el campo llega como str. Normalizar aca cuesta
+    nada y evita que un AttributeError tumbe un turno de conversacion.
+    """
+    raw = goal.get("spec") if isinstance(goal, dict) else None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning("spec ilegible en el objetivo %s", goal.get("kind"))
+            return {}
+    return raw if isinstance(raw, dict) else {}
 
 ETIQUETAS = {
     "coleccion":     "escuchar la colección en vinilo",
@@ -36,13 +54,17 @@ async def activos(room_id: str = "main") -> list[dict]:
         "SELECT id, kind, spec, window_days FROM goals "
         "WHERE active AND room_id = $1 ORDER BY created_at",
         room_id)
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        g = dict(r)
+        g["spec"] = _spec(g)
+        out.append(g)
+    return out
 
 
 async def declarar(kind: str, spec: dict, window_days: int = 30,
                    room_id: str = "main") -> dict:
     """Un objetivo activo por tipo y sala: declarar de nuevo reemplaza."""
-    import json
     await execute(
         "UPDATE goals SET active = false WHERE active AND room_id = $1 AND kind = $2",
         room_id, kind)
@@ -52,7 +74,9 @@ async def declarar(kind: str, spec: dict, window_days: int = 30,
         VALUES ($1, $2, $3::jsonb, $4)
         RETURNING id, kind, spec, window_days
         """, room_id, kind, json.dumps(spec), window_days)
-    return dict(row)
+    g = dict(row)
+    g["spec"] = _spec(g)
+    return g
 
 
 async def borrar(kind: str, room_id: str = "main") -> int:
@@ -132,7 +156,7 @@ async def progreso(goal: dict) -> dict:
     """Estado de un objetivo. Nunca levanta: un objetivo roto no puede
     tumbar un turno de conversacion."""
     kind = goal["kind"]
-    spec = goal.get("spec") or {}
+    spec = _spec(goal)
     dias = goal.get("window_days") or 30
     base = {"kind": kind, "spec": spec, "dias": dias,
             "actual": 0, "target": 0, "muestra": 0,
@@ -204,7 +228,7 @@ def linea_para_curador(e: dict) -> str | None:
     if not e or not e.get("suficiente") or e.get("cumplido"):
         return None
 
-    kind, spec = e["kind"], e.get("spec") or {}
+    kind, spec = e["kind"], _spec(e)
     if kind == "coleccion":
         return (f"Objetivo activo: {e['target']:.0f}% de escuchas de la colección "
                 f"en vinilo (vas {e['actual']:.0f}% en {e['dias']} días). "

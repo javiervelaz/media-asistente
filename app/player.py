@@ -168,6 +168,51 @@ async def get_status() -> dict:
     }
 
 
+# ------------------------------------------------------- salida de audio real
+
+_SALIDA_CACHE: dict = {"ok": None, "hasta": 0.0}
+SALIDA_TTL_S = 5.0
+
+
+def _hay_stream() -> bool | None:
+    """¿El audio de mpv llega a algún sink?
+
+    mpv puede reportar que reproduce —posición avanzando, sin pausa— mientras
+    su salida no llega a ningún lado: pasa cuando el sink por defecto de
+    PipeWire apunta a un device que ya no existe (un Bluetooth desconectado,
+    por ejemplo). Ahí `/status` dice todo verde y no se escucha nada.
+
+    Devuelve None si no se puede saber: mejor callarse que inventar un
+    diagnóstico. Nunca levanta.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("pactl"):
+        return None
+    try:
+        out = subprocess.run(["pactl", "list", "short", "sink-inputs"],
+                             capture_output=True, text=True, timeout=2)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    return any(l.strip() for l in out.stdout.splitlines())
+
+
+def salida_activa() -> bool | None:
+    """`_hay_stream` cacheado: se consulta en cada `qué suena` y no vale una
+    llamada a pactl por turno."""
+    import time as _t
+    ahora = _t.monotonic()
+    if _SALIDA_CACHE["ok"] is not None and ahora < _SALIDA_CACHE["hasta"]:
+        return _SALIDA_CACHE["ok"]
+    ok = _hay_stream()
+    if ok is not None:
+        _SALIDA_CACHE["ok"], _SALIDA_CACHE["hasta"] = ok, ahora + SALIDA_TTL_S
+    return ok
+
+
 # ---------------------------------------------------------------- observador
 
 _por_path: dict[str, str] = {}     # path absoluto → youtube_id

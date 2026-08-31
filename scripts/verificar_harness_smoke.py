@@ -10,7 +10,8 @@ import asyncio, sys, types
 
 # --- stubs solo si faltan (correr fuera del venv de la Pi) ------------------
 for mod, attrs in [
-    ("asyncpg", {"Pool": object, "create_pool": None}),
+    ("asyncpg", {"Pool": object, "create_pool": None,
+                 "Connection": object}),
     ("anthropic", {"AsyncAnthropic": object, "Anthropic": object}),
 ]:
     try:
@@ -40,6 +41,8 @@ player.get_status = fake_status
 player.resume = player.pause = player.next_track = player.prev_track = fake
 player.stop = player.restart_track = fake
 player.set_volume = fake_vol
+SALIDA = {"ok": True}
+player.salida_activa = lambda: SALIDA["ok"]
 
 # historial falso
 from app import history
@@ -199,6 +202,8 @@ async def main():
               "ese temita que sonaba en el bar", "no",
               # y ahora aceptando: el gasto queda atribuido al turno del "dale"
               "algo raro que no entiendo", "dale",
+              # el bot tiene que avisar que suena contra la nada
+              "__sin_salida__", "qué suena",
               # --- H4 ---
               "cómo voy",
               "quiero escuchar más de mi colección",
@@ -209,6 +214,9 @@ async def main():
               "armá una playlist de post-punk británico de 1980"]
     print("=" * 66)
     for f in frases:
+        if f == "__sin_salida__":
+            SALIDA["ok"] = False       # simula el sink fantasma
+            continue
         r = await chat.responder(f, session_id="tg:937324746")
         marca = "GRATIS" if r["free"] else f"${r['cost_tokens']} tok"
         print(f"\n> {f}")
@@ -235,6 +243,8 @@ async def main():
     # el objetivo atrasado se reproduce por SQL, sin curador
     assert ("tracks_para_objetivo", "coleccion") in LLAMADAS, \
         "el dale sobre un objetivo tiene que armar la cola por SQL"
+    avisos = [e for e in ESCRITO if e["intent"] == "estado_actual"]
+    assert len(avisos) >= 2, avisos
     obj = [e for e in ESCRITO if e["intent"] == "reproducir_objetivo"]
     assert obj and obj[0]["model"] is None, "reproducir_objetivo no puede gastar"
     assert ("lanzar", "De nuevo: hoy", 2) in LLAMADAS, "reproducir_historial no lanzo"

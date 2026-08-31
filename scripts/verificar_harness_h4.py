@@ -46,6 +46,17 @@ async def _schema() -> list[str]:
     else:
         print(f"  ok  goals ({len(reales)} columnas)")
 
+    # El codec de jsonb: sin el, asyncpg entrega `spec` como str y todo el
+    # codigo que hace spec.get(...) revienta. Se prueba con un valor real,
+    # no mirando la config del pool.
+    tipo = await fetchrow("SELECT '{\"a\": 1}'::jsonb AS v")
+    if isinstance(tipo["v"], dict):
+        print("  ok  jsonb llega como dict (codec registrado en el pool)")
+    else:
+        print(f"  FALLA: jsonb llega como {type(tipo['v']).__name__} — "
+              "falta el codec en db.py:_init_conn")
+        fallos.append("codec jsonb ausente")
+
     tags = await fetchrow(
         "SELECT data_type FROM information_schema.columns "
         "WHERE table_name = 'artists' AND column_name = 'tags'")
@@ -176,6 +187,29 @@ async def _material() -> list[str]:
     return fallos
 
 
+def _spec_defensivo() -> list[str]:
+    """`_spec` tiene que aguantar str, dict, None y basura."""
+    print()
+    print("=" * 66)
+    print("NORMALIZACIÓN DE spec")
+    print("=" * 66)
+    fallos = []
+    casos = [
+        ({"spec": {"target": 0.6}}, {"target": 0.6}, "dict"),
+        ({"spec": '{"target": 0.6}'}, {"target": 0.6}, "str (sin codec)"),
+        ({"spec": None}, {}, "None"),
+        ({"spec": "no es json"}, {}, "basura"),
+        ({}, {}, "ausente"),
+    ]
+    for entrada, esperado, nombre in casos:
+        got = goals._spec(entrada)
+        ok = got == esperado
+        print(f"  {'ok  ' if ok else 'FALLA'} {nombre:18} -> {got}")
+        if not ok:
+            fallos.append(f"_spec con {nombre}")
+    return fallos
+
+
 async def _ciclo() -> list[str]:
     """Declarar, leer, borrar — en una sala aparte para no tocar la tuya."""
     print()
@@ -209,6 +243,7 @@ async def main() -> None:
         if "tabla goals" in fallos:
             print("\nCorré primero: python -m scripts.migrate_goals")
             return
+        fallos += _spec_defensivo()
         fallos += await _ciclo()
         fallos += await _derivacion()
         fallos += await _guarda()
