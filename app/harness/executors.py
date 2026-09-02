@@ -448,6 +448,27 @@ async def _reproducir_coleccion(intent, st: SessionState) -> Result:
                   data={"count": len(tracks)}, actions=["playlist"])
 
 
+async def _coleccion_de_artista(intent: Intent, st: SessionState) -> Result:
+    """Un artista, pero solo lo que esta en el estante."""
+    if _lanzar_tracks is None:
+        return Result(render.error("el reproductor no esta enganchado"), ok=False)
+
+    a, nombre = await _con_artista(intent, st)
+    if not nombre:
+        return Result(render.no_entendido(), ok=False)
+    if not a:
+        return Result(render.sin_artista(nombre), ok=False)
+
+    tracks = await queries.coleccion_de_artista(a["mbid"])
+    if not tracks:
+        return Result(render.sin_artista_en_coleccion(a["name"]), ok=False)
+
+    resp = await _lanzar_tracks(tracks, f"{a['name']} (tu colección)", st.room_id)
+    st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)
+    return Result(render.coleccion_artista(tracks, a["name"]),
+                  data={"count": len(tracks)}, actions=["playlist"])
+
+
 async def _reproducir_disco_coleccion(intent, st: SessionState) -> Result:
     """Un album entero de tu coleccion, en orden.
 
@@ -532,6 +553,7 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "reproducir_objetivo": _reproducir_objetivo,
     "reproducir_coleccion": _reproducir_coleccion,
     "reproducir_disco_coleccion": _reproducir_disco_coleccion,
+    "coleccion_de_artista": _coleccion_de_artista,
     "rechazar": _rechazar,
     "no_entendido": _no_entendido,
 }

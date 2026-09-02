@@ -96,7 +96,7 @@ async def main() -> None:
             print(f"{len(casos)} frases reales de turn_log (sin etiqueta: "
                   "mirá si la clasificación te parece correcta)\n")
 
-        aciertos = errores = ambiguos_ok = 0
+        aciertos = errores = ambiguos_ok = cache = 0
         etapa1_deberia = []
         confusion: dict = {}
         tokens = 0
@@ -109,14 +109,20 @@ async def main() -> None:
 
             it, uso = await clasificador.clasificar(frase)
             tokens += uso["in"] + uso["out"]
+            cache += uso.get("cache_read") or 0
             if it is None:
                 print(f"  SIN RESPUESTA  {frase!r}")
                 errores += 1
                 continue
 
             marca = ""
-            if esperado is None:
-                # Ambiguo: lo correcto es dudar.
+            if usar_log:
+                # Sin etiqueta y sin respuesta correcta conocida: NO se juzga.
+                # Confundir "no etiquetado" con "debe dudar" hacía que toda
+                # clasificación acertada saliera como MAL.
+                marca = "—"
+            elif esperado is None:
+                # Ambiguo a propósito: lo correcto es dudar, no acertar.
                 ok = it.confidence < 0.6
                 ambiguos_ok += ok
                 marca = "ok (duda)" if ok else f"MAL (confianza {it.confidence:.2f})"
@@ -133,8 +139,8 @@ async def main() -> None:
             print(f"  {marca:28} {frase!r:46} → {it.name} "
                   f"({it.confidence:.2f}) {slots or ''}")
 
-        etiquetados = [c for c in casos if c[1] is not None]
-        ambiguos = [c for c in casos if c[1] is None]
+        etiquetados = [] if usar_log else [c for c in casos if c[1] is not None]
+        ambiguos = [] if usar_log else [c for c in casos if c[1] is None]
 
         print()
         print("=" * 70)
@@ -145,6 +151,14 @@ async def main() -> None:
             print(f"ambiguos que dudan bien: {ambiguos_ok}/{len(ambiguos)}")
         print(f"costo: {tokens} tokens en {len(casos)} clasificaciones "
               f"(~{tokens // max(1, len(casos))} por turno)")
+        if cache:
+            print(f"       {cache} leidos de cache "
+                  f"({100 * cache // max(1, tokens):d}% del total)")
+        if usar_log:
+            print("\nEstas frases no tienen etiqueta: revisá vos si cada")
+            print("clasificación es la que esperabas. Las que estén mal se")
+            print("arreglan con un ejemplo en el prompt o, mejor, con un")
+            print("patrón en la etapa 1 para que ni lleguen acá.")
 
         if confusion:
             print("\nconfusiones (esperado → devuelto):")

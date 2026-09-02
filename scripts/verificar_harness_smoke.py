@@ -191,6 +191,14 @@ async def _fake_clasificar(texto):
             {"in": 380, "out": 40, "cache_read": 0})
 
 _clas.clasificar = _fake_clasificar
+
+# etapa 1.5: la base dice si un texto pelado es un artista
+from app import local_search as _ls
+ARTISTAS = {"ataque 77", "rolling stones"}
+async def _fake_mono(prompt):
+    return (prompt or "").strip().lower() in ARTISTAS
+_ls.es_monografico = _fake_mono
+_chat2.local_search = _ls
 _chat2.clasificador = _clas
 
 # generador de playlists falso
@@ -226,6 +234,7 @@ async def main():
               "__sin_salida__", "qué suena",
               # --- H3: lo que los patrones no agarran ---
               "__clasifica__",
+              "Ataque 77",                        # -> etapa 1.5, sin modelo
               "necesito algo para laburar",       # -> playlist (0.9)
               "qué estuve escuchando estos días", # -> historial_periodo (0.85)
               "mmm no sé qué quiero",             # -> baja confianza: repregunta
@@ -263,19 +272,39 @@ async def main():
     for e in caros:
         print(f"  gasto: {e['intent']} (stage={e['stage']}) "
               f"in={e['input_tokens']} cache={e['cached_tokens']} out={e['output_tokens']}")
-    assert gratis == len(ESCRITO) - 2, (gratis, len(ESCRITO))
+    # nadie paga por accidente: cada turno con modelo tiene que ser
+    # o una clasificacion (380) o una ejecucion de curador (18400),
+    # o las dos juntas. cualquier otro numero es un gasto que se coló.
+    for e in caros:
+        assert e["input_tokens"] in (380, 18400, 18780), \
+            f"gasto no explicado: {e}"
+    assert gratis >= len(ESCRITO) - 8, (gratis, len(ESCRITO))
     frenados = [e for e in ESCRITO if e["intent"] == "confirmar_gasto"]
     assert len(frenados) == 2, frenados
-    assert all(f["model"] is None for f in frenados), "el freno no puede costar"
+    # desde H3 el freno ya no es gratis: para saber que no entiende hay que
+    # pasar por el clasificador. lo que no puede es haber tocado al curador.
+    assert all(f["input_tokens"] <= 380 for f in frenados), \
+        f"el freno gastó como si hubiera ejecutado: {frenados}"
+    assert not [l for l in LLAMADAS
+                if l[0] == "playlist" and l[1] == "ese temita que sonaba en el bar"], \
+        "el freno llamó al curador antes de preguntar"
     # el "dale" que acepta ejecuta la playlist y ESE turno es el que paga
     conf = [e for e in ESCRITO if e["intent"] == "confirmar"]
-    assert len(conf) == 2, conf
+    assert len(conf) == 3, conf   # efemérides, freno, objetivo
     pagos = [e for e in conf if e["model"]]
     assert len(pagos) == 1, f"el dale sobre un freno tiene que quedar como pago: {conf}"
     # el objetivo atrasado se reproduce por SQL, sin curador
     assert ("tracks_para_objetivo", "coleccion") in LLAMADAS, \
         "el dale sobre un objetivo tiene que armar la cola por SQL"
-    # el clasificador paga aunque no ejecute nada caro
+    # etapa 1.5: rutear un artista pelado no cuesta un solo token.
+    # el turno igual figura pago porque EJECUTA la playlist; lo que tiene
+    # que ser cero es el ruteo, no el total.
+    art = [e for e in ESCRITO if e["stage"] == "artista"]
+    assert art, "ningún turno se resolvió por etapa 1.5"
+    assert ("clasificar", "Ataque 77") not in LLAMADAS, \
+        "un artista que la base conoce no puede ir al clasificador"
+    assert art[0]["input_tokens"] == 18400, \
+        f"el ruteo del artista sumó tokens propios: {art[0]}"
     haiku = [e for e in ESCRITO if e["stage"] == "haiku"]
     assert haiku, "ningún turno pasó por el clasificador"
     assert all(e["input_tokens"] >= 380 for e in haiku), \
@@ -285,8 +314,10 @@ async def main():
 
     avisos = [e for e in ESCRITO if e["intent"] == "estado_actual"]
     assert len(avisos) >= 2, avisos
-    obj = [e for e in ESCRITO if e["intent"] == "reproducir_objetivo"]
-    assert obj and obj[0]["model"] is None, "reproducir_objetivo no puede gastar"
+    # el objetivo se reproduce aceptando la oferta, asi que el turno queda
+    # logueado como "confirmar": lo que importa es que ese dale no pagó.
+    assert conf[-1]["model"] is None, \
+        f"el dale del objetivo se fue al curador: {conf[-1]}"
     assert ("lanzar", "De nuevo: hoy", 2) in LLAMADAS, "reproducir_historial no lanzo"
     # lo que suena tiene que ser EXACTAMENTE el release listado
     assert ("tracks_de_releases", ("11111111-0000-0000-0000-000000000000",)) in LLAMADAS, \

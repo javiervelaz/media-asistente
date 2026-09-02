@@ -611,3 +611,30 @@ async def disco_de_coleccion(limite: int = 25) -> list[dict]:
     """
     rows = await fetch(SQL_OBJ_DISCO, limite)
     return [dict(r) for r in rows]
+
+
+async def coleccion_de_artista(artist_mbid, limite: int = 14) -> list[dict]:
+    """Los discos de UN artista que estan en el estante.
+
+    Salio de turn_log: "Buscar rolling stones en mi coleccion" aparecio como
+    pedido real y no existia el intent. Es el cruce que ningun servicio de
+    streaming puede hacer — sabe que te gusta, no que tenes.
+    """
+    rows = await fetch(
+        """
+        SELECT rc.mbid::text AS recording_mbid, a.name AS artist, rc.title,
+               rc.length_ms, r.title AS album,
+               (tr.recording_mbid IS NOT NULL) AS listo
+        FROM ephemerides e
+        JOIN releases   r  ON r.mbid = e.mbid::uuid
+        JOIN artists    a  ON a.mbid = r.artist_mbid
+        JOIN recordings rc ON rc.release_mbid = r.mbid
+        LEFT JOIN track_resolutions tr ON tr.recording_mbid = rc.mbid
+        WHERE e.weight = 1 AND e.mbid IS NOT NULL
+          AND r.artist_mbid = $1
+          AND COALESCE(tr.fail_count, 0) < 3
+          AND (rc.length_ms IS NULL OR rc.length_ms BETWEEN 60000 AND 900000)
+        ORDER BY listo DESC, r.first_release_date NULLS LAST, rc.position
+        LIMIT $2
+        """, artist_mbid, limite)
+    return [dict(r) for r in rows]

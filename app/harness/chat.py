@@ -13,9 +13,10 @@ import logging
 
 from app.config import settings
 from app.harness import clasificador, executors, queries, render, session
-from app.harness.intents import (FALLBACK, HAIKU, IMPLEMENTADOS,
+from app.harness.intents import (ARTISTA, FALLBACK, HAIKU, IMPLEMENTADOS,
                                  Intent, Result)
-from app.harness.router import etapa1, normalizar
+from app import local_search
+from app.harness.router import etapa1, normalizar, sin_verbo
 from app.harness.telemetry import Cronometro, log_turn
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,18 @@ async def _rutear(text: str) -> tuple[Intent, dict]:
     it = etapa1(text)
     if it is not None:
         return it, {}
+
+    # Etapa 1.5: el mensaje es el nombre de un artista y nada mas.
+    # "Ataque 77", "Rolling stones", "arctick monkeys" aparecieron asi en
+    # turn_log y pagaban clasificacion. Preguntarle a la base si ese texto
+    # es un artista cuesta una query y cero tokens — y es mas confiable que
+    # el modelo para nombres con typos, porque el trigram los tolera.
+    try:
+        if await local_search.es_monografico(text):
+            return Intent(name="playlist", slots={"prompt": sin_verbo(text)},
+                          confidence=1.0, stage=ARTISTA), {}
+    except Exception:
+        logger.exception("no pude chequear si el texto es un artista")
 
     if not settings.harness_clasificador:
         return Intent(name="no_entendido", slots={}, confidence=0.0,

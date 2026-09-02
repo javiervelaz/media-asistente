@@ -19,9 +19,11 @@ Tres decisiones que vienen de los bugs de los bloques anteriores:
    oferta antes, no de la frase: lo resuelve el ejecutor. Está en el enum
    igual, para que el modelo no lo empuje a otro lado.
 
-El system prompt es corto a propósito (~700 tokens): por debajo del mínimo de
-prompt caching no hay nada que cachear, y un catálogo chico clasifica mejor
-que uno exhaustivo.
+El costo por clasificacion medido en hardware fue 3.231 tokens, no los ~400
+que estimamos: los 16 ejemplos como turnos son ~3.000 tokens de prefijo en
+cada llamada. Por eso el system y el bloque de ejemplos llevan
+`cache_control`: son identicos en todas las llamadas y del segundo turno en
+adelante se leen del cache.
 """
 import json
 import logging
@@ -40,7 +42,8 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 #: palabras y no vale pagar por conjugarlos.
 INTENTS = [
     "playlist", "reproducir_historial", "reproducir_coleccion",
-    "reproducir_disco_coleccion", "historial_periodo", "historial_artista",
+    "reproducir_disco_coleccion", "coleccion_de_artista",
+    "historial_periodo", "historial_artista",
     "top_escuchados", "salteados", "nunca_escuchado", "discografia",
     "relaciones", "efemerides_hoy", "estado_objetivos",
     "set_objetivo_coleccion", "set_objetivo_descubrimiento",
@@ -93,6 +96,7 @@ EJEMPLOS = [
     ("volvé a poner lo de recién", "reproducir_historial", None),
     ("algo del estante que no haya escuchado", "reproducir_coleccion", None),
     ("poné un vinilo entero", "reproducir_disco_coleccion", None),
+    ("qué tengo de Sumo en el estante", "coleccion_de_artista", "Sumo"),
     ("me gustaría escuchar más folklore", "set_objetivo_genero", "folklore"),
     ("qué bandas se parecen a Wire", "relaciones", "Wire"),
     ("buenas tardes", "saludo", None),
@@ -138,7 +142,8 @@ def _mensajes(texto: str) -> list[dict]:
     for frase, intent, extra in EJEMPLOS:
         args = {"intent": intent, "confidence": 0.9}
         if extra:
-            args["artista" if intent in ("historial_artista", "relaciones")
+            args["artista" if intent in ("historial_artista", "relaciones",
+                                         "coleccion_de_artista")
                  else "genero"] = extra
         msgs.append({"role": "user", "content": frase})
         msgs.append({"role": "assistant", "content": [{
@@ -147,6 +152,17 @@ def _mensajes(texto: str) -> list[dict]:
         msgs.append({"role": "user", "content": [{
             "type": "tool_result", "tool_use_id": f"ej_{len(msgs) - 1}",
             "content": "ok"}]})
+    # Los 16 ejemplos son ~3.000 tokens de prefijo IDENTICO en cada llamada.
+    # Sin cachearlos, cada clasificacion los paga enteros: medido, 3.231
+    # tokens por turno en vez de los ~400 que estimamos. Con el breakpoint
+    # aca, del segundo turno en adelante se leen del cache.
+    if msgs:
+        ultimo = msgs[-1]
+        if isinstance(ultimo.get("content"), list):
+            ultimo["content"][-1]["cache_control"] = {"type": "ephemeral"}
+        else:
+            ultimo["content"] = [{"type": "text", "text": ultimo["content"],
+                                  "cache_control": {"type": "ephemeral"}}]
     msgs.append({"role": "user", "content": texto})
     return msgs
 
@@ -162,7 +178,8 @@ async def clasificar(texto: str) -> tuple[Intent | None, dict]:
         resp = await client.messages.create(
             model=settings.claude_model,
             max_tokens=200,
-            system=SYSTEM,
+            system=[{"type": "text", "text": SYSTEM,
+                     "cache_control": {"type": "ephemeral"}}],
             tools=[TOOL],
             tool_choice={"type": "tool", "name": "clasificar"},
             messages=_mensajes(texto),

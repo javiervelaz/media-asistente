@@ -9,6 +9,7 @@ from typing import Any
 # --- etapas del router, en orden de costo -----------------------------------
 REGEX = "regex"          # patrones: 0 tokens
 HAIKU = "haiku"          # clasificador: ~400 in cacheados / 60 out  (H3)
+ARTISTA = "artista"      # el texto ES un artista de la base: 0 tokens
 FALLBACK = "fallback"    # no se entendio: se repregunta con plantilla
 ERROR = "error"
 
@@ -67,6 +68,8 @@ CATALOGO: tuple[Spec, ...] = (
     Spec("efemerides_hoy",     "que aniversario de disco cae hoy"),
     Spec("reproducir_historial",
          "volver a poner lo que ya se escucho en un periodo"),
+    Spec("coleccion_de_artista",
+         "poner lo que hay de un artista en la coleccion en vinilo"),
     Spec("reproducir_disco_coleccion",
          "poner un album entero de la coleccion, en orden"),
     Spec("reproducir_coleccion",
@@ -118,6 +121,7 @@ IMPLEMENTADOS: set[str] = {
     # H4
     "estado_objetivos", "borrar_objetivo", "reproducir_objetivo",
     "reproducir_coleccion", "reproducir_disco_coleccion",
+    "coleccion_de_artista",
     "set_objetivo_coleccion", "set_objetivo_descubrimiento",
     "set_objetivo_genero", "set_objetivo_profundidad",
 }

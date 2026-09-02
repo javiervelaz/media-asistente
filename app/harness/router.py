@@ -32,8 +32,9 @@ _RUIDO = re.compile(
 #: matchea peor que "the beatles" — tanto que devolvia a John Lennon por el
 #: grafo de relaciones en vez de a los Beatles.
 _VERBO_PEDIDO = re.compile(
-    r"^\s*(?:pon[eé](?:me|le|lo|la)?|tira(?:me)?|dame|reproduc[ií](?:r|me)?|"
-    r"busca(?:me)?|arma(?:me)?|son[aá](?:me)?|quiero\s+escuchar|"
+    r"^\s*(?:pon[eé]r?(?:me|le|lo|la)?|tira(?:me)?|dame|"
+    r"reproduc[ií](?:r|rme|me)?|busca(?:r|rme|me)?|arma(?:r|me)?|"
+    r"son[aá](?:me)?|quiero\s+escuchar|"
     r"quiero\s+o[ií]r|tengo\s+ganas\s+de|escuchar)\s+"
     r"(?:algo\s+de\s+|un\s+poco\s+de\s+|musica\s+de\s+|m[uú]sica\s+de\s+)?",
     re.IGNORECASE)
@@ -97,7 +98,7 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"(?:\s+(?P<n>\d{1,3}))?$")),
 
     ("control_next", re.compile(
-        r"^(?:next|siguiente|pasa(?:r|la|le|lo)?|otra|otro|"
+        r"^(?:next|siguiente|proxim[ao]|pasa(?:r|la|le|lo)?|otra|otro|"
         r"cambia(?:r|la|lo)?|la que sigue|salta(?:r|la)?|saltear|"
         r"proxima|esta no|no esta)$")),
 
@@ -111,6 +112,7 @@ PATRONES: list[tuple[str, re.Pattern]] = [
 
     ("control_pause", re.compile(
         r"^(?:pausa|pausar|pausala|para|parar|pare|parala|stop|"
+        r"para la musica|frena la musica|"
         r"frena|frenar|frenala|silencio|callate|shh+|mute|"
         r"corta la musica|apaga la musica)$")),
 
@@ -187,7 +189,9 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     ("top_escuchados", re.compile(
         r"^(?:(?:que|a quien|quien)\s+(?:escucho|escuchamos)\s+mas.*"
         r"|mis mas escuchados|top|top artistas|mas escuchados|"
-        r"lo que mas escucho)$")),
+        r"lo que mas escucho|lo mas escuchado|"
+        r"(?:canciones|temas|artistas|bandas|discos)\s+mas\s+escuchad[oa]s?|"
+        r"(?:canciones|temas|artistas|bandas)\s+que\s+mas\s+escuch[eo])$")),
 
     ("salteados", re.compile(
         r"^(?:que\s+(?:me\s+)?salte[oa].*|que\s+me\s+salteo|"
@@ -211,6 +215,7 @@ PATRONES: list[tuple[str, re.Pattern]] = [
 
     ("efemerides_hoy", re.compile(
         r"^(?:efemerides|que se cumple hoy|que paso un dia como hoy|"
+        r"un dia como hoy|que paso hoy|"
         r"aniversarios?|que se festeja hoy|que cumple anos hoy)$")),
 
     # Pedir la coleccion directo, sin pasar por objetivos ni por un listado.
@@ -220,7 +225,7 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     # UN DISCO entero, en orden. Va antes que `reproducir_coleccion`:
     # "poneme un vinilo" es poner un disco, no catorce temas sueltos.
     ("reproducir_disco_coleccion", re.compile(
-        r"^(?:pone(?:me|le|lo|la)?|tirame|dame|quiero escuchar|"
+        r"^(?:pone(?:r|me|le|lo|la)?|tirame|dame|quiero escuchar|"
         r"reproduci(?:r|me)?|escuchar)?\s*"
         r"(?:un|una|algun)\s+"
         r"(?:disco|album|vinilo|lp)"
@@ -234,11 +239,27 @@ PATRONES: list[tuple[str, re.Pattern]] = [
 
     # Temas sueltos de la coleccion: variedad en vez de un disco.
     ("reproducir_coleccion", re.compile(
-        r"^(?:pone(?:me|le|lo|la)?|tirame|dame|quiero escuchar|"
-        r"reproduci(?:r|me)?|escuchar)?\s*"
+        r"^(?:pone(?:r|me|le|lo|la)?|tirame|dame|quiero escuchar|"
+        r"reproduci(?:r|me)?|escuchar|busca(?:r|me)?)?\s*"
         r"(?:algo|temas?|musica|un poco)?\s*"
         r"(?:de\s+|del\s+|de\s+la\s+)?"
         r"(?:mi|mis|el|los|la)?\s*"
+        r"(?:coleccion|vinilos?|estante|discos)$")),
+
+    # Cruce artista + coleccion: aparecio en turn_log y no existia.
+    #
+    # El patron es ESTRICTO a proposito: el artista es texto libre en el
+    # medio de la frase, que es justo donde un regex se vuelve fragil. Con
+    # el verbo y el articulo opcionales se comia "quiero escuchar mas de mi
+    # coleccion" y "borrame el objetivo de vinilo". Lo que no entra acá lo
+    # agarra el clasificador, que para esto es mejor herramienta.
+    ("coleccion_de_artista", re.compile(
+        r"^(?:busca(?:r|me)?|pone(?:r|me|le)?|tirame|dame|"
+        r"que\s+tengo\s+de|tengo|hay)\s+"
+        r"(?:algo\s+de\s+|temas?\s+de\s+|discos?\s+de\s+)?"
+        r"(?P<artista>(?!(?:quiero|borrame|algo|los|las|un|una|el|la|de|"
+        r"que|mi|mis|para|con)\b)[\w\s'.&-]{2,40}?)\s+"
+        r"(?:en|de)\s+(?:mi|mis|la|el|los)\s+"
         r"(?:coleccion|vinilos?|estante|discos)$")),
 
     # --- H4: objetivos ---
@@ -261,7 +282,8 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     ("set_objetivo_descubrimiento", re.compile(
         r"^(?:quiero\s+)?(?:descubrir|conocer)\s+"
         r"(?:(?P<n>\d{1,3})\s+)?(?:artistas?|bandas?|cosas?)"
-        r"(?:\s+nuev[oa]s?)?(?:\s+por\s+\w+)?$")),
+        r"(?:\s+nuev[oa]s?|\s+no\s+escuchad[oa]s?|\s+que\s+no\s+conozco)?"
+        r"(?:\s+por\s+\w+)?$")),
 
     ("set_objetivo_profundidad", re.compile(
         r"^(?:quiero\s+)?(?:escuchar\s+)?(?:mas\s+)?"
@@ -276,8 +298,8 @@ PATRONES: list[tuple[str, re.Pattern]] = [
     # que se manda al curador es el texto ORIGINAL, no el normalizado —
     # las tildes y las mayusculas son parte del pedido curatorial.
     ("playlist", re.compile(
-        r"^(?:pone(?:me|le|lo|la)?|arma(?:me)?|tira(?:me)?|dame|"
-        r"sona(?:me)?|reproduci(?:r|me)?|reproduce|busca(?:me)?|"
+        r"^(?:pone(?:r|me|le|lo|la)?|arma(?:me)?|tira(?:me)?|dame|"
+        r"sona(?:me)?|reproduci(?:r|me)?|reproduce|busca(?:r|me)?|"
         r"quiero escuchar|quiero oir|tengo ganas de|escuchar|algo de)"
         r"\s+(?P<libre>.{3,})$")),
 

@@ -474,3 +474,20 @@ def sin_disco_coleccion() -> str:
     return ("No encontré un disco de tu colección para poner entero: los que "
             "tenés cargados o sonaron hace poco, o no tienen tracklist. "
             "Probá \"algo de mi colección\" para temas sueltos.")
+
+
+def coleccion_artista(tracks: list[dict], artista: str) -> str:
+    albumes = []
+    for t in tracks:
+        if t.get("album") and t["album"] not in albumes:
+            albumes.append(t["album"])
+    linea = f"{artista}, de tu colección — {len(tracks)} temas"
+    if albumes:
+        linea += f" de {len(albumes)} disco" + ("s" if len(albumes) > 1 else "")
+        linea += ":\n" + "\n".join(f"· {a}" for a in albumes[:5])
+    return linea
+
+
+def sin_artista_en_coleccion(artista: str) -> str:
+    return (f"No tenés discos de {artista} en el estante. "
+            f"Puedo armarte algo igual: \"poné {artista}\".")
