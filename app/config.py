@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     # 21:30 de Cordoba ya es manana en UTC y "que escuche hoy" devuelve vacio
     # justo en el horario en que mas se usa el reproductor.
     harness_tz: str = "America/Argentina/Cordoba"
+    # --- H3: etapa 2 del router ---
+    # El clasificador corre SOLO si ningun patron matcheo. Cada patron nuevo
+    # le saca trabajo y costo.
+    harness_clasificador: bool = True
+    # Por debajo de esto se repregunta en vez de adivinar. Equivocarse cuesta
+    # una sesion de curador; preguntar cuesta cero.
+    harness_confianza_minima: float = 0.6
+    # Un reproductor no puede esperar a la red para entender "pausa".
+    harness_clasificador_timeout: float = 6.0
     # Cuando un turno va a terminar en el curador, avisar el costo y pedir
     # confirmacion en vez de gastar de una.
     #   "fallback" (default) — solo cuando el router NO entendio el pedido.

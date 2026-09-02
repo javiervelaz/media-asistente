@@ -109,7 +109,7 @@ IMPLEMENTADOS: set[str] = {
     "control_play", "control_pause", "control_next", "control_prev",
     "control_stop", "control_replay", "control_vol_up", "control_vol_down",
     "control_vol_set", "estado_actual", "estado_cola",
-    "playlist", "saludo", "ayuda", "repreguntar",
+    "playlist", "saludo", "ayuda", "repreguntar", "no_entendido",
     # H2
     "historial_periodo", "historial_artista", "top_escuchados", "salteados",
     "nunca_escuchado", "discografia", "relaciones", "efemerides_hoy",

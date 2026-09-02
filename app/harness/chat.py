@@ -12,12 +12,49 @@ Las dos unicas decisiones de gasto del modulo estan en `_resolver_fallback` y
 import logging
 
 from app.config import settings
-from app.harness import executors, queries, render, session
-from app.harness.intents import FALLBACK, Intent, Result
-from app.harness.router import normalizar, rutear
+from app.harness import clasificador, executors, queries, render, session
+from app.harness.intents import (FALLBACK, HAIKU, IMPLEMENTADOS,
+                                 Intent, Result)
+from app.harness.router import etapa1, normalizar
 from app.harness.telemetry import Cronometro, log_turn
 
 logger = logging.getLogger(__name__)
+
+
+async def _rutear(text: str) -> tuple[Intent, dict]:
+    """Patrones → clasificador → fallback. Devuelve (intent, uso).
+
+    El orden es el costo: la etapa 1 es gratis y resuelve la mayoría, la 2
+    cuesta unos cientos de tokens y solo corre si la 1 no entendió.
+    """
+    it = etapa1(text)
+    if it is not None:
+        return it, {}
+
+    if not settings.harness_clasificador:
+        return Intent(name="no_entendido", slots={}, confidence=0.0,
+                      stage=FALLBACK), {}
+
+    it, uso = await clasificador.clasificar(text)
+    if it is None:
+        # La API falló o tardó: el turno sigue por el fallback, que es
+        # exactamente lo que pasaba antes de que existiera la etapa 2.
+        return Intent(name="no_entendido", slots={}, confidence=0.0,
+                      stage=FALLBACK), uso
+
+    if it.name == "no_entendido" or it.confidence < settings.harness_confianza_minima:
+        # Repreguntar cuesta cero; adivinar mal cuesta una playlist que nadie
+        # pidió. El stage queda en HAIKU para que turn_log muestre que se
+        # pagó por no decidir — es la señal de que falta un patrón.
+        return Intent(name="repreguntar", slots={"texto": text.strip()},
+                      confidence=it.confidence, stage=HAIKU), uso
+
+    if it.name not in IMPLEMENTADOS:
+        logger.warning("el clasificador devolvió %s, sin ejecutor", it.name)
+        return Intent(name="repreguntar", slots={"texto": text.strip()},
+                      confidence=it.confidence, stage=HAIKU), uso
+
+    return it, uso
 
 
 def _resolver_fallback(intent: Intent, text: str) -> Intent:
@@ -82,7 +119,8 @@ async def responder(text: str, session_id: str, room_id: str = "main") -> dict:
     st.room_id = room_id or st.room_id
 
     with Cronometro() as c:
-        intent = _resolver_fallback(rutear(text), text)
+        ruteado, uso_router = await _rutear(text)
+        intent = _resolver_fallback(ruteado, text)
         freno = await _freno_de_gasto(intent, st, text)
         if freno is not None:
             res, intent = freno, Intent(name="confirmar_gasto",
@@ -92,12 +130,18 @@ async def responder(text: str, session_id: str, room_id: str = "main") -> dict:
             res = await executors.ejecutar(intent, st)
 
     uso = _uso(res)
+    # Lo que costó CLASIFICAR se suma a lo que costó ejecutar: el turno vale
+    # lo que vale entero, no solo su parte cara.
+    uso["input_tokens"] += int(uso_router.get("in") or 0)
+    uso["output_tokens"] += int(uso_router.get("out") or 0)
+    uso["cached_tokens"] += int(uso_router.get("cache_read") or 0)
     # `gasto` lo marca el ejecutor de playlist. No alcanza con el nombre del
     # intent (por una confirmacion el ruteado es `confirmar`) ni con los
     # tokens (la via local devuelve 0 y sigue siendo una playlist).
     gasto = bool((res.data or {}).get("gasto"))
+    clasificado = bool(uso_router.get("in"))
     modelo = (settings.curator_model if gasto and settings.curator_enabled
-              else settings.claude_model if gasto else None)
+              else settings.claude_model if (gasto or clasificado) else None)
 
     log_turn(session_id=session_id, room_id=room_id, text_in=text,
              intent=intent.name, stage=intent.stage,

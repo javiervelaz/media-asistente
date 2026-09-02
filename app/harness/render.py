@@ -142,7 +142,9 @@ quiero escuchar álbumes enteros
 
 *Música nueva* (esto sí usa el curador)
 decime qué querés: "algo tranqui para cocinar", "cumbia santafesina".
-Si no te entiendo, te aviso cuánto sale antes de gastar."""
+
+Hablame como te salga: si no encaja en ningún atajo, lo interpreto igual.
+Cuando algo va a gastar tokens, te aviso antes."""
 
 
 def saludo(track: dict | None) -> str:

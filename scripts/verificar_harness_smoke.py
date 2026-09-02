@@ -12,7 +12,8 @@ import asyncio, sys, types
 for mod, attrs in [
     ("asyncpg", {"Pool": object, "create_pool": None,
                  "Connection": object}),
-    ("anthropic", {"AsyncAnthropic": object, "Anthropic": object}),
+    ("anthropic", {"AsyncAnthropic": lambda **k: None,
+                   "Anthropic": lambda **k: None}),
 ]:
     try:
         __import__(mod)
@@ -173,6 +174,25 @@ async def fake_lanzar(tracks_, titulo, room_id="main"):
     return {"playlist_id": "p-2", "title": titulo, "queued": len(tracks_),
             "first_track": tracks_[0]}
 
+# --- H3: clasificador falso (no se llama a la API en los tests) ----------
+from app.harness import clasificador as _clas, chat as _chat2
+from app.harness.intents import HAIKU as _HAIKU, Intent as _Intent
+
+CLASIFICA = {}          # texto -> (intent, confianza)
+
+async def _fake_clasificar(texto):
+    par = CLASIFICA.get(texto)
+    LLAMADAS.append(("clasificar", texto))
+    if not par:
+        return None, {"in": 380, "out": 40, "cache_read": 0}
+    nombre, conf = par
+    slots = {"prompt": texto} if nombre == "playlist" else {}
+    return (_Intent(name=nombre, slots=slots, confidence=conf, stage=_HAIKU),
+            {"in": 380, "out": 40, "cache_read": 0})
+
+_clas.clasificar = _fake_clasificar
+_chat2.clasificador = _clas
+
 # generador de playlists falso
 async def fake_playlist(prompt, room_id="main"):
     LLAMADAS.append(("playlist", prompt))
@@ -204,6 +224,11 @@ async def main():
               "algo raro que no entiendo", "dale",
               # el bot tiene que avisar que suena contra la nada
               "__sin_salida__", "qué suena",
+              # --- H3: lo que los patrones no agarran ---
+              "__clasifica__",
+              "necesito algo para laburar",       # -> playlist (0.9)
+              "qué estuve escuchando estos días", # -> historial_periodo (0.85)
+              "mmm no sé qué quiero",             # -> baja confianza: repregunta
               # --- H4 ---
               "cómo voy",
               "quiero escuchar más de mi colección",
@@ -214,6 +239,13 @@ async def main():
               "armá una playlist de post-punk británico de 1980"]
     print("=" * 66)
     for f in frases:
+        if f == "__clasifica__":
+            CLASIFICA.update({
+                "necesito algo para laburar": ("playlist", 0.9),
+                "qué estuve escuchando estos días": ("historial_periodo", 0.85),
+                "mmm no sé qué quiero": ("playlist", 0.35),   # bajo el umbral
+            })
+            continue
         if f == "__sin_salida__":
             SALIDA["ok"] = False       # simula el sink fantasma
             continue
@@ -243,6 +275,14 @@ async def main():
     # el objetivo atrasado se reproduce por SQL, sin curador
     assert ("tracks_para_objetivo", "coleccion") in LLAMADAS, \
         "el dale sobre un objetivo tiene que armar la cola por SQL"
+    # el clasificador paga aunque no ejecute nada caro
+    haiku = [e for e in ESCRITO if e["stage"] == "haiku"]
+    assert haiku, "ningún turno pasó por el clasificador"
+    assert all(e["input_tokens"] >= 380 for e in haiku), \
+        "el costo de clasificar no se sumó al turno"
+    bajo = [e for e in haiku if e["intent"] == "repreguntar"]
+    assert bajo, "una confianza de 0.35 tiene que repreguntar, no adivinar"
+
     avisos = [e for e in ESCRITO if e["intent"] == "estado_actual"]
     assert len(avisos) >= 2, avisos
     obj = [e for e in ESCRITO if e["intent"] == "reproducir_objetivo"]
