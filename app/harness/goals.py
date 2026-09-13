@@ -29,9 +29,18 @@ def _spec(goal: dict) -> dict:
     El pool registra un codec para jsonb, pero un script que arme su propio
     pool no lo tiene — y ahi el campo llega como str. Normalizar aca cuesta
     nada y evita que un AttributeError tumbe un turno de conversacion.
+
+    Desenvuelve hasta dos veces porque hay filas viejas DOBLE-ENCODEADAS: el
+    insert pasaba `json.dumps(spec)` y el codec de jsonb lo volvia a
+    serializar, dejando un string JSON dentro de un jsonb. Para esas filas
+    `spec->>'target'` en SQL devuelve NULL en silencio. El insert ya no lo
+    hace; esto es la red para lo que quedo guardado (lo repara
+    `scripts/fix_goals_spec.py`).
     """
     raw = goal.get("spec") if isinstance(goal, dict) else None
-    if isinstance(raw, str):
+    for _ in range(2):
+        if not isinstance(raw, str):
+            break
         try:
             raw = json.loads(raw)
         except (ValueError, TypeError):
@@ -64,7 +73,13 @@ async def activos(room_id: str = "main") -> list[dict]:
 
 async def declarar(kind: str, spec: dict, window_days: int = 30,
                    room_id: str = "main") -> dict:
-    """Un objetivo activo por tipo y sala: declarar de nuevo reemplaza."""
+    """Un objetivo activo por tipo y sala: declarar de nuevo reemplaza.
+
+    `spec` va como dict, NO como `json.dumps(spec)`: `db.init_pool` registra
+    un codec que serializa jsonb por su cuenta. Pasarle un str ya serializado
+    lo serializa de nuevo y guarda un string JSON dentro del jsonb — que el
+    codigo Python todavia lee (por `_spec`) y el SQL ya no.
+    """
     await execute(
         "UPDATE goals SET active = false WHERE active AND room_id = $1 AND kind = $2",
         room_id, kind)
@@ -73,7 +88,7 @@ async def declarar(kind: str, spec: dict, window_days: int = 30,
         INSERT INTO goals (room_id, kind, spec, window_days)
         VALUES ($1, $2, $3::jsonb, $4)
         RETURNING id, kind, spec, window_days
-        """, room_id, kind, json.dumps(spec), window_days)
+        """, room_id, kind, spec, window_days)
     g = dict(row)
     g["spec"] = _spec(g)
     return g

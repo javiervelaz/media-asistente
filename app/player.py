@@ -229,8 +229,34 @@ def salida_activa() -> bool | None:
 
 # ---------------------------------------------------------------- observador
 
-_por_path: dict[str, str] = {}     # path absoluto → youtube_id
+_por_path: dict[str, str] = {}     # path absoluto -> youtube_id
 MAX_REGISTRO = 500                 # techo: el Pi 3B tiene 1 GB
+
+#: Estado del track en curso, mantenido por el observador desde
+#: `property-change`.
+#:
+#: **Por que existe:** mpv NO manda el path en el evento `end-file`. Los
+#: campos del evento son `reason`, `file_error` y `playlist_entry_id` — nunca
+#: `playlist_entry_path`, que es lo que este modulo leia desde el primer
+#: commit. Resultado: `yid` era siempre None, el `eof` nunca se atribuia y
+#: `register_complete` no se llamo una sola vez. Las 26 filas con
+#: `completed = true` que hay en la base las puso el backfill de
+#: `migrate_completed.py` a partir de `played_ms`, no el observador.
+#:
+#: La unica forma confiable de saber QUE termino es haber seguido `path`
+#: mientras sonaba. De paso, seguir `time-pos` y `duration` da el `played_ms`
+#: real de una escucha completa, que antes se estimaba con `length_ms`.
+_actual: dict = {"path": None, "time_pos": 0.0, "duration": None}
+
+#: Propiedades que el observador pide al conectarse.
+OBSERVADAS = ("path", "time-pos", "duration")
+
+#: Un `eof` con menos de esta fraccion de la duracion reproducida no es una
+#: escucha completa: es un stream que se corto. Sin esta guarda, una descarga
+#: trunca entra a la base como senal positiva y envenena el ranking.
+EOF_RATIO_MINIMO = 0.6
+
+_diagnostico_end_file = True       # loguea el primer end-file crudo
 
 
 def registrar_track(path: str | Path, youtube_id: str) -> None:
@@ -240,17 +266,81 @@ def registrar_track(path: str | Path, youtube_id: str) -> None:
         _por_path.pop(next(iter(_por_path)))
 
 
+def track_en_curso() -> dict:
+    """Lo que el observador cree que esta sonando. Para diagnostico."""
+    return dict(_actual)
+
+
+def _yid_de_path(path: str) -> str | None:
+    """youtube_id de un path, con red de contencion.
+
+    Los archivos del cache se llaman `<youtube_id>.<ext>`, asi que si el
+    registro en memoria no tiene ese path —un restart del servicio, un path
+    relativo— el nombre del archivo alcanza. `register_complete` valida
+    contra `play_history` de todos modos, asi que un stem que no corresponda
+    no marca nada.
+    """
+    if not path:
+        return None
+    yid = _por_path.get(str(Path(path).resolve()))
+    if yid:
+        return yid
+    stem = Path(path).stem
+    return stem or None
+
+
+def _pedir_observaciones(sock: socket.socket) -> None:
+    """Pide las property-change SIN esperar respuesta.
+
+    No usa `_enviar_en_socket` a proposito: ese metodo descarta todo lo que
+    no traiga su `request_id`, y en este socket lo que no trae request_id son
+    justamente los eventos. Las respuestas de estos comandos las ve el loop
+    de lectura y las ignora por no tener clave `event`.
+    """
+    for i, prop in enumerate(OBSERVADAS, start=1):
+        payload = json.dumps({"command": ["observe_property", i, prop],
+                              "request_id": next(_req_id)}) + "\n"
+        sock.sendall(payload.encode())
+
+
+def _aplicar_property_change(ev: dict) -> None:
+    nombre, data = ev.get("name"), ev.get("data")
+    if nombre == "path":
+        # data None al final de la cola: se conserva el ultimo path valido
+        # para que el end-file que viene atras se pueda atribuir.
+        if data:
+            _actual.update(path=str(data), time_pos=0.0, duration=None)
+    elif nombre == "time-pos":
+        # mpv manda None al terminar el archivo. Guardar el ultimo valor
+        # bueno es justo lo que hace medible cuanto se escucho.
+        if isinstance(data, (int, float)):
+            _actual["time_pos"] = float(data)
+    elif nombre == "duration":
+        if isinstance(data, (int, float)) and data > 0:
+            _actual["duration"] = float(data)
+
+
 def _observador(loop: asyncio.AbstractEventLoop, on_fail, on_eof) -> None:
-    """Conexión persistente que lee eventos. Corre en un thread propio."""
+    """Conexion persistente que lee eventos. Corre en un thread propio."""
+    global _diagnostico_end_file
+
     while True:
         try:
             sock = _conectar(timeout=None)
         except MPVError as e:
-            logger.warning("observador: %s — reintento en 5s", e)
+            logger.warning("observador: %s - reintento en 5s", e)
             threading.Event().wait(5)
             continue
 
         logger.info("observador de mpv conectado")
+        try:
+            _pedir_observaciones(sock)
+        except OSError as e:
+            logger.warning("observador: no pude pedir las propiedades: %s", e)
+            sock.close()
+            threading.Event().wait(2)
+            continue
+
         buffer = b""
         try:
             while True:
@@ -266,22 +356,49 @@ def _observador(loop: asyncio.AbstractEventLoop, on_fail, on_eof) -> None:
                         ev = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if ev.get("event") != "end-file":
+
+                    evento = ev.get("event")
+                    if evento == "property-change":
+                        _aplicar_property_change(ev)
                         continue
+                    if evento != "end-file":
+                        continue
+
+                    if _diagnostico_end_file:
+                        # Una vez, para poder confirmar contra mpv real que
+                        # campos trae de verdad el evento.
+                        logger.info("primer end-file crudo: %s", ev)
+                        _diagnostico_end_file = False
+
                     reason = ev.get("reason")
                     if reason == "stop":
-                        continue          # stop/next manual, no es error
-                    path = ev.get("playlist_entry_path") or ""
-                    yid = _por_path.get(str(Path(path).resolve())) if path else None
+                        continue          # next/stop manual, no es error
+
+                    # `playlist_entry_path` primero por si alguna version de
+                    # mpv lo manda; el seguimiento de `path` es el que
+                    # realmente funciona.
+                    path = ev.get("playlist_entry_path") or _actual.get("path") or ""
+                    yid = _yid_de_path(path)
+                    escuchado = float(_actual.get("time_pos") or 0.0)
+                    duracion = _actual.get("duration")
 
                     if reason == "eof":
-                        # El track llegó al final: es la única señal positiva
-                        # del sistema. Antes se descartaba acá mismo y el
-                        # término `completos` del scoring valía siempre cero.
-                        if yid and on_eof:
-                            asyncio.run_coroutine_threadsafe(on_eof(yid), loop)
-                        elif not yid:
-                            logger.debug("eof de un path no registrado: %s", path)
+                        if not yid:
+                            logger.warning(
+                                "eof sin path atribuible (path=%r): la senal "
+                                "positiva de este track se pierde", path)
+                            continue
+                        # Un stream cortado tambien llega como eof. Si se
+                        # escucho menos del minimo, no es una escucha
+                        # completa y no entra a la base como tal.
+                        if duracion and escuchado < duracion * EOF_RATIO_MINIMO:
+                            logger.info(
+                                "eof prematuro: %s (%.0fs de %.0fs) - no cuenta",
+                                yid, escuchado, duracion)
+                            continue
+                        if on_eof:
+                            asyncio.run_coroutine_threadsafe(
+                                on_eof(yid, int(escuchado * 1000)), loop)
                         continue
 
                     logger.error(
@@ -300,8 +417,9 @@ def _observador(loop: asyncio.AbstractEventLoop, on_fail, on_eof) -> None:
 def iniciar_observador(on_fail=None, on_eof=None) -> None:
     """Llamar una vez en el startup de FastAPI.
 
-    on_fail: coroutine (youtube_id, motivo) -> None, típicamente music.mark_failed.
-    on_eof:  coroutine (youtube_id) -> None, típicamente history.register_complete.
+    on_fail: coroutine (youtube_id, motivo) -> None, tipicamente music.mark_failed.
+    on_eof:  coroutine (youtube_id, played_ms) -> None, tipicamente
+             history.register_complete.
     """
     loop = asyncio.get_running_loop()
     t = threading.Thread(target=_observador, args=(loop, on_fail, on_eof),

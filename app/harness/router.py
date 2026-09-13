@@ -203,6 +203,81 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"|discos sin escuchar|que no escuche nunca|"
         r"vinilos sin escuchar|que me falta escuchar)$")),
 
+    # --- Orden de pregunta en castellano: el verbo va al FINAL ---------------
+    #
+    # Los diez turnos que pagaron el clasificador entre el 2 y el 12/9 son
+    # todos esta forma, y ninguno de los patrones de arriba la cubre porque
+    # todos esperan el verbo adelante ("que discos tengo de X"). Preguntando
+    # se dice al reves:
+    #
+    #   Que discos de Queen hay en la coleccion?          x4
+    #   De Andres Calamaro que tenemos en la coleccion?
+    #   que discos de frank sinastra tenemos en la coleccion?
+    #   Que discos de REM tengo disponible para escuchar?
+    #   que discos de mi coleccion estan sin escuchar?
+    #   que hay en la coleccion para escuchar?
+    #   Que puedo escuchar de mi coleccion?
+    #
+    # La distincion coleccion / discografia se resuelve por una palabra
+    # presente en el texto, no por criterio del modelo: si nombra el estante
+    # es `coleccion_de_artista`, si no es `discografia`. Deterministico y sin
+    # ambiguedad — la regla que el catalogo ya tenia y el regex no aplicaba.
+
+    # "que discos de mi coleccion estan sin escuchar" — va PRIMERO porque
+    # "de mi coleccion" matchearia como si "mi coleccion" fuera el artista.
+    ("nunca_escuchado", re.compile(
+        r"^que\s+(?:discos?|albumes?|vinilos?|cosas?)\s+"
+        r"(?:de\s+(?:mi|la|el)\s+(?:coleccion|estante|vinilos?)\s+)?"
+        r"(?:estan\s+|quedan\s+|tengo\s+|me\s+quedan\s+)?"
+        r"sin\s+escuchar$")),
+
+    # "que hay en la coleccion para escuchar" / "que puedo escuchar de mi
+    # coleccion". Es una CONSULTA, no un pedido: lista el estante sin
+    # escuchar y deja la oferta, que el turno siguiente resuelve con "dale".
+    # Reproducir directo romperia la regla de que preguntar no puede pisarte
+    # lo que estas escuchando.
+    ("nunca_escuchado", re.compile(
+        r"^que\s+(?:hay|tengo|queda|me\s+queda|puedo\s+escuchar|"
+        r"puedo\s+poner|escucho)\s+"
+        r"(?:en|de)\s+(?:mi|mis|la|el|los)\s+"
+        r"(?:coleccion|estante|vinilos?|discos)"
+        r"(?:\s+para\s+escuchar|\s+sin\s+escuchar)?$")),
+
+    # "que discos de X hay en la coleccion" — con marcador de estante.
+    ("coleccion_de_artista", re.compile(
+        r"^(?:que|cuales|cuantos)\s+"
+        r"(?:discos?|albumes?|temas?|vinilos?|cosas?)\s+"
+        r"(?:de|del)\s+"
+        r"(?P<artista>(?!(?:mi|mis|la|el|los|las|un|una|que|para|con)\b)"
+        r"[\w\s'.&-]{2,40}?)\s+"
+        r"(?:tengo|hay|tenemos|tenes|quedan?|me\s+quedan)"
+        r"(?:\s+(?:disponibles?|guardados?|cargados?))?"
+        r"\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+"
+        r"(?:coleccion|estante|vinilos?|discos)"
+        r"(?:\s+para\s+escuchar)?$")),
+
+    # "de Andres Calamaro que tenemos en la coleccion" — artista adelante.
+    ("coleccion_de_artista", re.compile(
+        r"^de\s+"
+        r"(?P<artista>(?!(?:mi|mis|la|el|los|las|un|una|que)\b)"
+        r"[\w\s'.&-]{2,40}?)\s+"
+        r"(?:que|cuales|cuantos)\s+"
+        r"(?:discos?|albumes?|temas?|cosas?\s+)?"
+        r"(?:tengo|hay|tenemos|tenes)"
+        r"\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+"
+        r"(?:coleccion|estante|vinilos?|discos)$")),
+
+    # Misma forma pero SIN marcador de estante: es la discografia del grafo,
+    # no el vinilo. "que discos de REM tengo disponible para escuchar".
+    ("discografia", re.compile(
+        r"^(?:que|cuales|cuantos)\s+"
+        r"(?:discos?|albumes?)\s+(?:de|del)\s+"
+        r"(?P<artista>(?!(?:mi|mis|la|el|los|las|un|una|que|para|con)\b)"
+        r"[\w\s'.&-]{2,40}?)\s+"
+        r"(?:tengo|hay|tenemos|tenes|quedan?)"
+        r"(?:\s+(?:disponibles?|guardados?|cargados?))?"
+        r"(?:\s+para\s+escuchar)?$")),
+
     ("discografia", re.compile(
         r"^(?:que\s+discos\s+(?:tengo|hay|tenes)\s+de|discografia\s+de|"
         r"discos\s+de|albumes\s+de)\s+(?P<artista>.+)$")),
@@ -264,10 +339,17 @@ PATRONES: list[tuple[str, re.Pattern]] = [
 
     # --- H4: objetivos ---
 
+    # El anclaje en $ dejaba afuera cualquier cola temporal: "como vengo
+    # este mes" pago una clasificacion de Haiku por tres palabras de mas.
+    # La ventana del objetivo la define `window_days`, no la frase, asi que
+    # la cola se acepta y se ignora.
     ("estado_objetivos", re.compile(
-        r"^(?:como voy|mis objetivos|como vengo|objetivos|"
-        r"como voy con (?:mis )?(?:los )?objetivos|estado de objetivos|"
-        r"como vengo con eso)$")),
+        r"^(?:como\s+(?:voy|vengo|vamos|venimos)"
+        r"(?:\s+con\s+(?:mis\s+|los\s+)?(?:objetivos?|eso|esto))?"
+        r"(?:\s+(?:este\s+mes|esta\s+semana|este\s+ano|hoy|"
+        r"hasta\s+ahora|por\s+ahora))?"
+        r"|mis\s+objetivos|objetivos|estado\s+de\s+(?:mis\s+)?objetivos|"
+        r"que\s+objetivos\s+tengo)$")),
 
     ("borrar_objetivo", re.compile(
         r"^(?:borra|saca|olvida|cancela|elimina)(?:me|te)?\s+"

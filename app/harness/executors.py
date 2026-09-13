@@ -7,6 +7,13 @@ que alimenta local_search quedaria a medias segun por donde entraste.
 
 `main.py` inyecta los cancelables en el startup para no importar main desde
 aca (ciclo de imports).
+
+
+Sobre `ok`: significa **el turno funciono**, no **habia resultados**.
+Una respuesta como "no tengo a ese artista en la base" es correcta y
+util, asi que va con ok=True. Marcarla como falla mezclaba en `turn_log`
+los errores reales con las respuestas negativas legitimas, y dejaba la
+tasa de error sin significado.
 """
 import asyncio
 import logging
@@ -260,7 +267,8 @@ async def _discografia(intent: Intent, st) -> Result:
     if not nombre:
         return Result(render.no_entendido(), ok=False)
     if not a:
-        return Result(render.sin_artista(nombre), ok=False)
+        return Result(render.sin_artista(nombre),
+                      data={"sin_artista": nombre})
     rows = await queries.discografia(a["mbid"])
     return Result(render.discografia(rows, a["name"]), data={"count": len(rows)})
 
@@ -270,7 +278,8 @@ async def _relaciones(intent: Intent, st) -> Result:
     if not nombre:
         return Result(render.no_entendido(), ok=False)
     if not a:
-        return Result(render.sin_artista(nombre), ok=False)
+        return Result(render.sin_artista(nombre),
+                      data={"sin_artista": nombre})
     rows = await queries.relaciones(a["mbid"])
     return Result(render.relaciones(rows, a["name"]), data={"count": len(rows)})
 
@@ -457,11 +466,13 @@ async def _coleccion_de_artista(intent: Intent, st: SessionState) -> Result:
     if not nombre:
         return Result(render.no_entendido(), ok=False)
     if not a:
-        return Result(render.sin_artista(nombre), ok=False)
+        return Result(render.sin_artista(nombre),
+                      data={"sin_artista": nombre})
 
     tracks = await queries.coleccion_de_artista(a["mbid"])
     if not tracks:
-        return Result(render.sin_artista_en_coleccion(a["name"]), ok=False)
+        return Result(render.sin_artista_en_coleccion(a["name"]),
+                      data={"sin_artista_en_coleccion": a["name"]})
 
     resp = await _lanzar_tracks(tracks, f"{a['name']} (tu colección)", st.room_id)
     st.tocar(last_playlist_id=str(resp.get("playlist_id") or "") or None)

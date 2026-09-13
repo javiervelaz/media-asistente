@@ -113,14 +113,32 @@ def ventana(texto: str, hoy: date | None = None) -> Ventana:
 
 # --------------------------------------------------------------- artistas
 
+#: Todo lo que no sea letra o numero, para comparar nombres sin puntuacion.
+_SOLO_ALNUM = r"[^a-z0-9]"
+
+
 async def resolver_artista(nombre: str) -> dict | None:
     """Nombre tipeado -> artista del grafo, por trigram.
 
-    Devuelve None si no matchea: mejor decir "no lo tengo" que responder
-    sobre otro artista parecido.
+    Dos pasadas. La primera compara contra `artists.name` tal cual, que es lo
+    que resuelve el 95% de los casos y usa el indice trigram.
+
+    La segunda compara **sin puntuacion** y solo si la primera no encontro
+    nada. pg_trgm no ignora los puntos, asi que "REM" contra "R.E.M." da una
+    similitud por debajo del umbral del operador `%` y el bot contestaba
+    "no tengo a REM en la base" teniendo 18 releases cargados. Aplanando los
+    dos lados, "rem" contra "rem" da 1.0.
+
+    Cuesta un seq scan sobre `artists` (~6k filas) y solo corre cuando la
+    primera pasada fallo, que es exactamente cuando vale pagarlo.
+
+    Devuelve None si no matchea ninguna: mejor decir "no lo tengo" que
+    responder sobre otro artista parecido.
     """
     if not nombre or len(nombre.strip()) < 2:
         return None
+    nombre = nombre.strip()
+
     row = await fetchrow(
         """
         SELECT mbid, name, similarity(name, $1) AS sim
@@ -128,7 +146,28 @@ async def resolver_artista(nombre: str) -> dict | None:
         WHERE name % $1 AND similarity(name, $1) >= $2
         ORDER BY sim DESC, name
         LIMIT 1
-        """, nombre.strip(), SIM_THRESHOLD)
+        """, nombre, SIM_THRESHOLD)
+    if row:
+        return dict(row)
+
+    plano = re.sub(_SOLO_ALNUM, "", nombre.lower())
+    if len(plano) < 2:
+        return None
+
+    row = await fetchrow(
+        """
+        SELECT mbid, name, sim FROM (
+            SELECT mbid, name,
+                   similarity(regexp_replace(lower(name), $3, '', 'g'), $1) AS sim
+            FROM artists
+        ) s
+        WHERE sim >= $2
+        ORDER BY sim DESC, name
+        LIMIT 1
+        """, plano, SIM_THRESHOLD, _SOLO_ALNUM)
+    if row:
+        logger.info("artista resuelto sin puntuacion: %r -> %r (%.2f)",
+                    nombre, row["name"], row["sim"])
     return dict(row) if row else None
 
 

@@ -213,15 +213,26 @@ async def _insert_releases(artist_mbid: str, artist_name: str,
             rg.get("primary-type"), rg.get("secondary-types", []),
         )
 
-        # Compat con el despertador viejo. UNIQUE es (artist, album).
+        # Compat con el despertador viejo.
+        #
+        # El conflict target es `mbid`, NO `(artist, album)`. Con la clave en
+        # los titulos, "Back in Black" y "Back In Black" entraban como dos
+        # discos distintos con el mismo mbid: 282 filas duplicadas sobre
+        # 9.626, y `weight = 1` es la definicion de "esta en el estante", asi
+        # que cada duplicado sesga el ratio del objetivo de coleccion y el
+        # termino de procedencia de `local_search`.
+        #
+        # Requiere `UNIQUE (mbid)`: lo crea `scripts/dedup_ephemerides.py`,
+        # que hay que correr ANTES de desplegar esto.
         await execute(
             """
             INSERT INTO ephemerides (artist, album, release_date, month_day, mbid, weight)
             VALUES ($1,$2,$3,$4,$5,$6)
-            ON CONFLICT (artist, album) DO UPDATE SET
+            ON CONFLICT (mbid) DO UPDATE SET
+              artist       = EXCLUDED.artist,
+              album        = EXCLUDED.album,
               release_date = EXCLUDED.release_date,
               month_day    = EXCLUDED.month_day,
-              mbid         = EXCLUDED.mbid,
               weight       = LEAST(ephemerides.weight, EXCLUDED.weight)
             """,
             artist_name, rg["title"], fecha.isoformat(),

@@ -48,43 +48,75 @@ def get_track_at(pos: int | None) -> dict | None:
     return tracks[pos] if pos < len(tracks) else None
 
 
-async def register_complete(youtube_id: str) -> None:
-    """El track llego al final: senal positiva.
+async def register_complete(youtube_id: str, played_ms: int | None = None) -> None:
+    """El track llego al final: la unica senal positiva del sistema.
 
-    Se dispara desde el observador de mpv con reason=eof, que antes se
-    descartaba. Matchea por youtube_id y no por posicion porque el evento
-    llega antes de que mpv avance playlist-pos. Si el mismo track aparece
-    dos veces en la playlist marca la primera ocurrencia sin marcar.
+    La dispara el observador de mpv con reason=eof. `played_ms` viene medido
+    del `time-pos` que el observador sigue por property-change; si no llega,
+    se cae al `length_ms` del track, que es una estimacion.
+
+    Matchea por youtube_id y no por posicion porque el evento llega antes de
+    que mpv avance `playlist-pos`. Si el mismo track aparece dos veces en la
+    playlist marca la primera ocurrencia sin marcar.
+
+    Si `_current` esta vacio —el servicio arranco con musica sonando y
+    `restaurar_current` no encontro correspondencia— igual se marca la fila
+    mas reciente de ese youtube_id. Antes se salia sin hacer nada y la
+    escucha se perdia entera; una atribucion por youtube_id reciente es
+    imperfecta pero es infinitamente mejor que descartar la senal.
     """
-    if not _current["playlist_id"] or not youtube_id:
+    if not youtube_id:
         return
 
     t = find_by_youtube_id(youtube_id)
-    length_ms = (t or {}).get("length_ms")
+    ms = played_ms if played_ms and played_ms > 0 else (t or {}).get("length_ms")
+    playlist_id = _current.get("playlist_id")
 
     try:
-        marcadas = await execute(
-            """
-            UPDATE play_history
-            SET completed = true,
-                skipped   = false,
-                played_ms = COALESCE(played_ms, $3)
-            WHERE id = (
-                SELECT id FROM play_history
-                WHERE playlist_id = $1
-                  AND youtube_id = $2
-                  AND NOT completed
-                  AND skipped IS DISTINCT FROM true
-                ORDER BY position NULLS LAST, id
-                LIMIT 1
+        if playlist_id:
+            marcadas = await execute(
+                """
+                UPDATE play_history
+                SET completed = true,
+                    skipped   = false,
+                    played_ms = COALESCE($3, played_ms)
+                WHERE id = (
+                    SELECT id FROM play_history
+                    WHERE playlist_id = $1
+                      AND youtube_id = $2
+                      AND NOT completed
+                      AND skipped IS DISTINCT FROM true
+                    ORDER BY position NULLS LAST, id
+                    LIMIT 1
+                )
+                """,
+                playlist_id, youtube_id, ms,
             )
-            """,
-            _current["playlist_id"], youtube_id, length_ms,
-        )
+        else:
+            marcadas = await execute(
+                """
+                UPDATE play_history
+                SET completed = true,
+                    skipped   = false,
+                    played_ms = COALESCE($2, played_ms)
+                WHERE id = (
+                    SELECT id FROM play_history
+                    WHERE youtube_id = $1
+                      AND NOT completed
+                      AND skipped IS DISTINCT FROM true
+                      AND started_at > now() - interval '6 hours'
+                    ORDER BY started_at DESC NULLS LAST, id DESC
+                    LIMIT 1
+                )
+                """,
+                youtube_id, ms,
+            )
+
         if marcadas.endswith("0"):
             logger.debug("eof sin fila que marcar: %s", youtube_id)
-        elif t:
-            logger.info("completo: %s - %s", t.get("artist"), t.get("title"))
+        else:
+            logger.info("completo: %s - %s (%s ms)",
+                        (t or {}).get("artist"), (t or {}).get("title"), ms)
     except Exception:
         logger.exception("no pude registrar la reproduccion completa")
 
