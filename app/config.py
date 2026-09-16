@@ -54,6 +54,28 @@ class Settings(BaseSettings):
     #   "nunca"              — comportamiento historico.
     harness_confirmar_gasto: str = "fallback"
 
+    # --- H5: proactividad ---
+    # Apagado por defecto. Un bloque que le escribe al usuario sin que nadie
+    # lo haya prendido a mano es exactamente el modo de falla que hay que
+    # evitar.
+    harness_sugerencia_activa: bool = False
+    # Hora LOCAL (harness_tz) a la que se manda. El cron de n8n corre cada
+    # hora y la API decide si es la hora: mover el horario es un cambio de
+    # config en la Pi, no una edicion del flujo. Es tambien donde nacio el
+    # bug del despertador — el horario viviendo en dos lugares.
+    harness_sugerencia_hora: int = 20
+    # Un mbid no se vuelve a sugerir antes de esto. Sin esta guarda el mismo
+    # disco del estante llega siete dias seguidos y a la tercera dejas de
+    # leer los mensajes: ahi el canal esta muerto aunque el contenido mejore.
+    harness_sugerencia_dias_repetir: int = 60
+    # Desde cuando cuenta como "sin escuchar" un disco del estante.
+    harness_sugerencia_estante_dias: int = 90
+    # Un tipo de sugerencia por debajo de esta tasa de aceptacion, despues de
+    # `harness_sugerencia_min_envios`, deja de mandarse solo. El bloque se
+    # poda con sus propios datos, igual que la etapa 1 crece con turn_log.
+    harness_sugerencia_min_aceptacion: float = 0.2
+    harness_sugerencia_min_envios: int = 10
+
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 
 

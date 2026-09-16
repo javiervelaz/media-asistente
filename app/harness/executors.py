@@ -17,10 +17,11 @@ tasa de error sin significado.
 """
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Awaitable, Callable
 
 from app import player
-from app.harness import goals, queries, render
+from app.harness import goals, queries, render, sugerencias
 from app.harness.intents import Intent, Result
 from app.harness.session import SessionState
 from app.history import get_current, get_track_at, register_advance
@@ -526,6 +527,23 @@ async def _reproducir_objetivo(intent: Intent, st: SessionState) -> Result:
                   actions=["playlist"])
 
 
+async def _silenciar(intent: Intent, st: SessionState) -> Result:
+    """Apaga las sugerencias proactivas por un rato, o las vuelve a prender.
+
+    Que exista este escape es parte del diseno de H5, no un extra: un canal
+    del que no te podes bajar sin desinstalar algo se cierra de la peor
+    manera, ignorandolo. Con salida explicita, el silencio queda medido
+    —cuando lo pediste y por cuanto— en vez de disfrazarse de sugerencias
+    ignoradas y ensuciar la tasa de aceptacion.
+    """
+    dias = int(intent.slots.get("dias") or 0)
+    hasta = queries.ahora() + timedelta(days=dias)
+    await sugerencias.silenciar(st.room_id, hasta)
+    if dias <= 0:
+        return Result(render.silencio_levantado(), data={"dias": 0})
+    return Result(render.silenciado(hasta), data={"dias": dias})
+
+
 EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "control_play": _play,
     "control_pause": _pause,
@@ -554,6 +572,8 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "reproducir_historial": _reproducir_historial,
     "reproducir_releases": _reproducir_releases,
     "confirmar": _confirmar,
+    # --- H5 ---
+    "silenciar": _silenciar,
     # --- H4 ---
     "estado_objetivos": _estado_objetivos,
     "set_objetivo_coleccion": _obj_coleccion,

@@ -6,12 +6,14 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 from app import local_search, player, tracks
 from app.auth import verify_api_key
 from app.harness import executors as harness_exec, goals
+from app.harness import render as harness_render
+from app.harness import sugerencias as harness_sug
 from app.harness import queries as harness_queries
 from app.harness.chat import responder as harness_responder
 from app.config import settings
@@ -786,6 +788,119 @@ async def playlist_objetivo(req: ObjetivoRequest):
                          play_now=req.play_now)
     resp["objetivo"] = {k: e[k] for k in ("kind", "actual", "target", "dias")}
     return resp
+
+
+# === H5: proactividad ===
+
+class SugerenciaRequest(BaseModel):
+    room_id: str = "telegram"
+    # Para probar sin esperar a las 20:00. No saltea las OTRAS guardas: una
+    # por dia, no apilar y "ya escuchaste hoy" siguen valiendo, porque son
+    # las que evitan que el bot se vuelva molesto.
+    ignorar_hora: bool = False
+
+
+class RespuestaSugerenciaRequest(BaseModel):
+    id: int
+    aceptada: bool
+    n_tracks: int = 14
+
+
+@app.get("/sugerencia/preview", dependencies=[Depends(verify_api_key)])
+async def sugerencia_preview(room_id: str = "telegram",
+                             ignorar_hora: bool = True):
+    """Que se mandaria hoy, SIN registrar nada ni mandar nada.
+
+    Existe para poder iterar la logica de seleccion un sabado a la tarde en
+    vez de esperar siete dias, y sin contaminar la tasa de aceptacion — que
+    es la unica metrica que decide si el bloque sirve.
+    """
+    s, motivo = await harness_sug.elegir(room_id, ignorar_hora=ignorar_hora)
+    if s is None:
+        return {"hay": False, "motivo": motivo}
+    return {"hay": True, "kind": s.kind, "etiqueta": s.etiqueta,
+            "mbids": s.mbids, "goal_id": s.goal_id,
+            "texto": harness_render.sugerencia(s)}
+
+
+@app.post("/sugerencia", dependencies=[Depends(verify_api_key)])
+async def sugerencia_mandar(req: SugerenciaRequest, response: Response):
+    """Elige, registra la fila y devuelve el mensaje con sus dos botones.
+
+    **204 cuando no hay nada que decir**, y eso no es un error: es el
+    requisito central del bloque. Un bot que no tiene nada que decir y habla
+    igual te entrena a ignorarlo, y de eso no se vuelve.
+
+    El motivo del silencio se loguea SIEMPRE: un cron que decide callarse y
+    un cron que no corrio son indistinguibles sin esa linea.
+    """
+    s, motivo = await harness_sug.elegir(req.room_id,
+                                         ignorar_hora=req.ignorar_hora)
+    if s is None:
+        logger.info("sin sugerencia para %s: %s", req.room_id, motivo)
+        response.status_code = 204
+        return None
+
+    await harness_sug.registrar(s, req.room_id)
+    return {"id": s.id, "kind": s.kind, "etiqueta": s.etiqueta,
+            "texto": harness_render.sugerencia(s),
+            "botones": harness_render.botones(s)}
+
+
+@app.post("/sugerencia/respuesta", dependencies=[Depends(verify_api_key)])
+async def sugerencia_respuesta(req: RespuestaSugerenciaRequest):
+    """El boton. Puede llegar seis horas despues y con el proceso reiniciado.
+
+    Por eso la oferta vive en la tabla y no en `SessionState`: ese mecanismo
+    tiene TTL de 5 minutos y se pierde entero en un restart.
+
+    Lo que suena es exactamente lo que se ofrecio. Para `efemeride` y
+    `estante` son los mbids guardados en la fila; `objetivo` no nombra discos
+    en el mensaje, asi que arma la playlist al aceptar sin faltar a la verdad.
+    """
+    fila = await harness_sug.responder(req.id, req.aceptada)
+    if fila is None:
+        # Inexistente o ya contestada. En Telegram la gente aprieta el boton
+        # dos veces; encolar la playlist de nuevo seria un bug visible.
+        return {"ok": False, "reply": harness_render.sugerencia_vencida()}
+
+    if not req.aceptada:
+        return {"ok": True, "reply": harness_render.sugerencia_rechazada()}
+
+    etiqueta = fila["etiqueta"]
+    room_id = fila["room_id"]
+
+    if fila["mbids"]:
+        tracks_ = await harness_queries.tracks_de_releases(
+            list(fila["mbids"]), limite=req.n_tracks)
+    else:
+        e = await goals.mas_atrasado(room_id)
+        if not e:
+            return {"ok": False,
+                    "reply": "Ese objetivo ya no está activo."}
+        tracks_ = await harness_queries.tracks_para_objetivo(
+            e["kind"], e.get("spec"), req.n_tracks)
+
+    if not tracks_:
+        return {"ok": False,
+                "reply": f"No me quedó material para {etiqueta}."}
+
+    resp = await _lanzar(tracks_, etiqueta, room_id=room_id, source="replay")
+    return {"ok": True, "playlist_id": resp.get("playlist_id"),
+            "reply": harness_render.sugerencia_aceptada(
+                resp, etiqueta, len(tracks_))}
+
+
+@app.get("/sugerencias/tasa", dependencies=[Depends(verify_api_key)])
+async def sugerencias_tasa(dias: int = 90):
+    """Aceptacion por tipo, y que tipos quedaron podados.
+
+    La lectura que hay que hacer sin autoenganio: si `ignoradas` domina en los
+    tres tipos, el problema no es el criterio ni la redaccion — es que no
+    queres que el bot te escriba, y lo correcto es apagar H5, no afinarlo.
+    """
+    return {"tasa": await harness_sug.tasa(dias),
+            "podados": sorted(await harness_sug.tipos_podados())}
 
 
 # === Harness conversacional ===

@@ -337,6 +337,24 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"(?:en|de)\s+(?:mi|mis|la|el|los)\s+"
         r"(?:coleccion|vinilos?|estante|discos)$")),
 
+    # --- H5: el escape de la proactividad ---
+    #
+    # OJO con el orden y con el anclaje: `silencio` a secas ya significa
+    # "pausá la música" y matchea en `control_pause`, mas arriba. Este patron
+    # EXIGE una duracion, asi que no se pisan: "silencio" pausa, "silencio una
+    # semana" calla al bot. Son dos cosas distintas y la diferencia es una
+    # palabra.
+    ("silenciar", re.compile(
+        r"^(?:silencio|no me escribas|no me molestes|no me avises|"
+        r"dejame tranquilo|dejame en paz|callate)\s+"
+        r"(?:por\s+)?(?:un[ao]?\s+)?"
+        r"(?:(?P<cantidad>\d{1,3})\s+)?"
+        r"(?P<unidad>dias?|semanas?|mes|meses)$")),
+
+    ("silenciar", re.compile(
+        r"^(?:volve a escribirme|escribime de nuevo|escribime|"
+        r"sacame el silencio|ya podes escribirme)$")),
+
     # --- H4: objetivos ---
 
     # El anclaje en $ dejaba afuera cualquier cola temporal: "como vengo
@@ -404,6 +422,21 @@ def _slots(name: str, m: re.Match) -> dict:
 
     if "que" in g and g["que"]:
         return {"que": g["que"].strip()}
+
+    if name == "silenciar":
+        unidad = (g.get("unidad") or "").strip()
+        if not unidad:
+            return {"dias": 0}          # "volve a escribirme"
+        cantidad = int(g.get("cantidad") or 1)
+        # Por prefijo y no por `rstrip("s")`: eso convertia "mes" en "me" y
+        # "no me escribas por un mes" silenciaba un dia.
+        if unidad.startswith("semana"):
+            mult = 7
+        elif unidad.startswith("mes"):
+            mult = 30
+        else:
+            mult = 1
+        return {"dias": cantidad * mult}
 
     if name.startswith("set_objetivo"):
         n = g.get("n")

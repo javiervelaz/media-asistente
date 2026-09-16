@@ -173,7 +173,9 @@ async def progreso(goal: dict) -> dict:
     kind = goal["kind"]
     spec = _spec(goal)
     dias = goal.get("window_days") or 30
-    base = {"kind": kind, "spec": spec, "dias": dias,
+    # `id` viaja con el estado: `mas_atrasado` es lo unico que ve H5 y sin el
+    # id no puede dejar registrado a que objetivo correspondia la sugerencia.
+    base = {"id": goal.get("id"), "kind": kind, "spec": spec, "dias": dias,
             "actual": 0, "target": 0, "muestra": 0,
             "unidad": "%", "suficiente": False}
 

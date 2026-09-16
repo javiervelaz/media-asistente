@@ -491,3 +491,91 @@ def coleccion_artista(tracks: list[dict], artista: str) -> str:
 def sin_artista_en_coleccion(artista: str) -> str:
     return (f"No tenés discos de {artista} en el estante. "
             f"Puedo armarte algo igual: \"poné {artista}\".")
+
+
+# ------------------------------------------------------------------- H5
+
+# Tres reglas de redaccion, no negociables porque son las que hacen que el
+# mensaje se siga leyendo a los dos meses:
+#
+#   1. Una razon CONCRETA y verificable. "Te puede gustar" es ruido; "no suena
+#      hace mas de 90 dias" es un dato que el sistema tiene.
+#   2. Nunca mas de tres lineas. Es una notificacion, no un informe.
+#   3. Sin signos de admiracion y sin saludo. El bot no esta contento de
+#      verte, esta avisando algo.
+
+
+def sugerencia(s) -> str:
+    """El texto del push. Plantilla, como todo lo demas.
+
+    El renderer no cambia de reglas por ser proactivo: un LLM redactando una
+    linea por dia son ~600 tokens diarios por algo que un f-string resuelve en
+    cero, y que ocasionalmente inventa un disco que no estaba en las filas.
+    """
+    d = s.datos or {}
+
+    if s.kind == "efemeride":
+        anio = d.get("anio") or ""
+        aniv = d.get("aniversario")
+        cab = f"Un día como hoy{', ' + str(anio) if anio else ''}: {s.etiqueta}."
+        if aniv:
+            cab += f" Cumple {int(aniv)}."
+        return f"{cab}\nLo tenés en el estante."
+
+    if s.kind == "estante":
+        anio = d.get("anio")
+        dias = _dias_estante()
+        return (f"{s.etiqueta}{f' ({anio})' if anio else ''}.\n"
+                f"Está en el estante y no suena hace más de {dias} días.")
+
+    if s.kind == "objetivo":
+        unidad = d.get("unidad") or "%"
+        if unidad == "%":
+            marcador = f"{d.get('actual', 0):.0f}% de {d.get('target', 0):.0f}%"
+        else:
+            marcador = f"{d.get('actual', 0):.0f} de {d.get('target', 0):.0f} {unidad}"
+        return (f"Vas {marcador} en {s.etiqueta}, en {d.get('dias', 30)} días.\n"
+                "Puedo armarte algo que empuje para ahí.")
+
+    return s.etiqueta
+
+
+def _dias_estante() -> int:
+    from app.config import settings
+    return settings.harness_sugerencia_estante_dias
+
+
+def botones(s) -> list[dict]:
+    """Los dos botones inline. El texto del `si` cambia segun que se ofrece."""
+    from app.harness import sugerencias as _sug
+    si = "Ponelo" if s.mbids else "Dale"
+    return [
+        {"text": si, "callback_data": _sug.callback_data(s.id, True)},
+        {"text": "No ahora", "callback_data": _sug.callback_data(s.id, False)},
+    ]
+
+
+def sugerencia_aceptada(resp: dict, etiqueta: str, n: int) -> str:
+    ft = (resp or {}).get("first_track") or {}
+    cab = f"Va: {etiqueta} — {n} tema" + ("s." if n != 1 else ".")
+    if ft:
+        cab += f"\nArranca: {ft.get('artist')} — {ft.get('title')}"
+    return cab
+
+
+def sugerencia_rechazada() -> str:
+    return "Listo, no va."
+
+
+def sugerencia_vencida() -> str:
+    """Un segundo toque del boton, o una sugerencia ya contestada."""
+    return "Esa ya la contestaste."
+
+
+def silenciado(hasta) -> str:
+    return f"Listo, no te escribo hasta el {hasta:%d/%m}."
+
+
+def silencio_levantado() -> str:
+    return "Listo, vuelvo a escribirte."
+

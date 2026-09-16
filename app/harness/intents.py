@@ -92,6 +92,9 @@ CATALOGO: tuple[Spec, ...] = (
          "armar la playlist que mas mueve el objetivo mas atrasado",
          modelo=None),
 
+    # --- proactividad (H5) ---
+    Spec("silenciar", "dejar de recibir las sugerencias diarias por un tiempo"),
+
     # --- lo unico que gasta ---
     Spec("playlist", "armar una playlist nueva a partir de un pedido curatorial",
          modelo="curator"),
@@ -124,6 +127,8 @@ IMPLEMENTADOS: set[str] = {
     "coleccion_de_artista",
     "set_objetivo_coleccion", "set_objetivo_descubrimiento",
     "set_objetivo_genero", "set_objetivo_profundidad",
+    # H5
+    "silenciar",
 }
 
 

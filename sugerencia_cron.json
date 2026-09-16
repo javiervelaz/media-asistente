@@ -1,0 +1,167 @@
+{
+  "name": "Media Pi - Sugerencia diaria",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "cron-sugerencia",
+      "name": "Cada hora en punto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        0
+      ],
+      "notes": "Corre cada hora y la API decide si es la hora (harness_sugerencia_hora, en harness_tz). Mover el horario es un cambio de config en la Pi, no una edicion de este flujo: el horario viviendo en dos lugares es exactamente como nacio el bug del despertador."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://media.countercrm.com/sugerencia",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.MEDIA_API_KEY }}"
+            },
+            {
+              "name": "CF-Access-Client-Id",
+              "value": "={{ $env.CF_ACCESS_CLIENT_ID }}"
+            },
+            {
+              "name": "CF-Access-Client-Secret",
+              "value": "={{ $env.CF_ACCESS_CLIENT_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ room_id: 'telegram' }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "post-sugerencia",
+      "name": "Pedir sugerencia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -20,
+        0
+      ],
+      "notes": "neverError + fullResponse para poder ver el 204. 204 = no hay nada que decir, y eso NO es un error: es el requisito central de H5."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-hay",
+      "name": "Hay algo que decir?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        0
+      ],
+      "notes": "Rama false = silencio. Sin nodo atras: no se manda nada."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.body.texto, reply_markup: { inline_keyboard: [ $json.body.botones ] } }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "enviar",
+      "name": "Enviar sugerencia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        420,
+        -100
+      ],
+      "notes": "Los botones vienen armados por la API con su callback_data ('sug:<id>:si'). La respuesta la maneja la rama de callback del flujo principal: un solo webhook por token de bot."
+    }
+  ],
+  "connections": {
+    "Cada hora en punto": {
+      "main": [
+        [
+          {
+            "node": "Pedir sugerencia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pedir sugerencia": {
+      "main": [
+        [
+          {
+            "node": "Hay algo que decir?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hay algo que decir?": {
+      "main": [
+        [
+          {
+            "node": "Enviar sugerencia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
