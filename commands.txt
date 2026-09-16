@@ -1,0 +1,25 @@
+sudo sed -i 's/^dtoverlay=hifiberry-dacplus.*/dtoverlay=hifiberry-dacplushd/' /boot/firmware/config.txt
+tail -6 /boot/firmware/config.txt
+
+testcounter1111@gmail.com
+TESTCOUNTER1111@gmail.com
+
+laserq soporte --preset bajo --espesor 5.9 --alivio 7 --margen 5 --nombre "JAVIER" --marca-imagen docs\logo_counter_marca.png --marca-alto 14 -o out\premium_cara.gcode
+
+laserq soporte --preset bajo --espesor 5.9 --alivio 7 --margen 5 --sin-marca -o out\premium_dorso.gcode
+
+laserq check out\premium_cara.gcode
+laserq check out\premium_dorso.gcode
+laserq preview out\premium_cara.gcode -o out\premium_cara.png
+
+laserq status
+laserq jog --x 0 --y 0
+laserq set-origin
+laserq run out\premium_cara.gcode --no-home
+
+laserq jog --y 170 --rel
+laserq set-origin
+laserq run out\premium_dorso.gcode --no-home
+
+testcounter1111@gmail.com
+CounterTest2026
