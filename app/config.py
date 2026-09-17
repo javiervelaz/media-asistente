@@ -1,5 +1,10 @@
 """Configuración cargada desde .env"""
+import logging
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -77,6 +82,69 @@ class Settings(BaseSettings):
     harness_sugerencia_min_envios: int = 10
 
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
+
+    # --- validadores tolerantes -------------------------------------------
+    #
+    # REGLA: un campo OBLIGATORIO (database_url, las api keys) tiene que
+    # fallar fuerte — sin eso el sistema no funciona y es mejor no arrancar.
+    # Un campo OPCIONAL CON DEFAULT no puede tumbar el servicio: cae al
+    # default y avisa.
+    #
+    # La diferencia no es teorica. `harness_sugerencia_hora=10:30` en el .env
+    # —un typo razonable en un campo que se llama "hora"— mato el import de
+    # `app.config`, y con el import murio uvicorn entero: 33 reinicios en
+    # loop, el reproductor caido y Cloudflare devolviendo 502. Todo por la
+    # config de un bloque que estaba APAGADO.
+    #
+    # Es la misma regla que ya aplican `goals.progreso` ("un objetivo roto no
+    # puede tumbar un turno") y `telemetry` (fire-and-forget), subida un nivel.
+
+    @field_validator("harness_sugerencia_hora", mode="before")
+    @classmethod
+    def _solo_la_hora(cls, v):
+        """Acepta 20, "20" y "20:30" -> 20. Nunca levanta.
+
+        Los minutos se descartan a proposito: el cron corre en punto, asi que
+        una hora con minutos no dispararia nunca. Mejor usar la hora y decirlo
+        que fallar, y mucho mejor que aceptarlo en silencio y no mandar nada.
+        """
+        default = 20
+        if v is None or v == "":
+            return default
+        crudo = str(v).strip()
+        if ":" in crudo:
+            logger.warning(
+                "harness_sugerencia_hora=%r: el cron corre en punto, uso la "
+                "hora %s y descarto los minutos", crudo, crudo.split(":")[0])
+            crudo = crudo.split(":", 1)[0]
+        try:
+            h = int(crudo)
+        except (TypeError, ValueError):
+            logger.error("harness_sugerencia_hora=%r no es una hora; uso %d",
+                         v, default)
+            return default
+        if not 0 <= h <= 23:
+            logger.error("harness_sugerencia_hora=%d fuera de 0..23; uso %d",
+                         h, default)
+            return default
+        return h
+
+    @field_validator("harness_sugerencia_min_aceptacion", mode="before")
+    @classmethod
+    def _ratio(cls, v):
+        """Acepta 0.2, "0.2" y "20%" -> 0.2. Nunca levanta."""
+        default = 0.2
+        if v is None or v == "":
+            return default
+        crudo = str(v).strip()
+        try:
+            if crudo.endswith("%"):
+                return max(0.0, min(1.0, float(crudo[:-1]) / 100))
+            return max(0.0, min(1.0, float(crudo)))
+        except (TypeError, ValueError):
+            logger.error("harness_sugerencia_min_aceptacion=%r invalido; uso %s",
+                         v, default)
+            return default
 
 
 settings = Settings()
