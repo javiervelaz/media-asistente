@@ -71,14 +71,20 @@ async def silenciar(room_id: str, hasta: datetime) -> None:
         """, room_id, hasta)
 
 
-async def _guardas(room_id: str, ahora: datetime,
-                   ignorar_hora: bool) -> str | None:
+async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
+                   ignorar_apagado: bool = False) -> str | None:
     """Devuelve el motivo por el que NO se manda, o None si se puede mandar.
 
     Se evaluan antes de elegir contenido: no tiene sentido buscar que decir
     si no corresponde hablar.
+
+    `ignorar_apagado` es para el preview. "Apagado" no es una guarda de
+    molestia como las otras —es el interruptor del bloque— y mezclarlas
+    dejaba el preview inservible: su razon de existir es poder ver que se
+    mandaria ANTES de prender nada, y con el flag en False contestaba
+    "apagado" y nada mas.
     """
-    if not settings.harness_sugerencia_activa:
+    if not settings.harness_sugerencia_activa and not ignorar_apagado:
         return "apagado (harness_sugerencia_activa = False)"
 
     hasta = await _silencio_hasta(room_id)
@@ -265,19 +271,29 @@ async def _ultimo_kind(room_id: str, ahora: datetime) -> str | None:
 
 
 async def elegir(room_id: str = "main", *, ahora: datetime | None = None,
-                 ignorar_hora: bool = False) -> tuple[Sugerencia | None, str]:
+                 ignorar_hora: bool = False, ignorar_apagado: bool = False,
+                 ignorar_guardas: bool = False) -> tuple[Sugerencia | None, str]:
     """Que mandar hoy, o por que no se manda nada. NO registra nada.
 
     Devuelve `(sugerencia, motivo)`. Con sugerencia en None, `motivo` explica
     el silencio — que es lo que hace diagnosticable un cron que decide
     callarse. Sin eso, un bot mudo y un cron que no corrio son
     indistinguibles.
+
+    Los tres `ignorar_*` son para el preview y para los tests, nunca para el
+    envio real:
+      - `ignorar_hora`: no esperar a las 20:00 para probar;
+      - `ignorar_apagado`: ver que se mandaria antes de prender el bloque;
+      - `ignorar_guardas`: saltear TODAS las guardas de molestia para iterar
+        el contenido. Con esto se ve que se diria hoy aunque ya se haya
+        mandado una, que es lo unico que hace falta para ajustar el texto.
     """
     ahora = ahora or queries.ahora()
 
-    motivo = await _guardas(room_id, ahora, ignorar_hora)
-    if motivo:
-        return None, motivo
+    if not ignorar_guardas:
+        motivo = await _guardas(room_id, ahora, ignorar_hora, ignorar_apagado)
+        if motivo:
+            return None, motivo
 
     podados = await tipos_podados()
     ultimo = await _ultimo_kind(room_id, ahora)

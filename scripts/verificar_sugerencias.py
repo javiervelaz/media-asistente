@@ -82,10 +82,16 @@ async def _correr() -> None:
         check(len(cb.encode()) <= 64, f"callback_data({i}) cabe",
               f"{cb} = {len(cb.encode())} bytes")
 
-    print("\n2 · el bloque apagado no manda nada")
+    print("\n2 · el bloque apagado no manda, pero el preview igual muestra")
     settings.harness_sugerencia_activa = False
     s, motivo = await sug.elegir(SALA, ignorar_hora=True)
     check(s is None and "apagado" in motivo, "apagado -> no manda", motivo)
+
+    # El preview es lo que se mira para decidir si prender el bloque: exigir
+    # que ya este prendido lo dejaba inservible.
+    s, motivo = await sug.elegir(SALA, ignorar_hora=True, ignorar_apagado=True)
+    check("apagado" not in motivo,
+          "con el bloque apagado, el preview igual evalua contenido", motivo)
 
     settings.harness_sugerencia_activa = True
 

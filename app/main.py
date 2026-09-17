@@ -808,19 +808,34 @@ class RespuestaSugerenciaRequest(BaseModel):
 
 @app.get("/sugerencia/preview", dependencies=[Depends(verify_api_key)])
 async def sugerencia_preview(room_id: str = "telegram",
-                             ignorar_hora: bool = True):
+                             ignorar_hora: bool = True,
+                             ignorar_guardas: bool = False):
     """Que se mandaria hoy, SIN registrar nada ni mandar nada.
 
     Existe para poder iterar la logica de seleccion un sabado a la tarde en
     vez de esperar siete dias, y sin contaminar la tasa de aceptacion — que
     es la unica metrica que decide si el bloque sirve.
+
+    Por eso NO respeta `harness_sugerencia_activa`: el preview es lo que se
+    mira para decidir si prender el bloque, asi que exigir que ya este
+    prendido lo dejaba inservible. Las guardas de molestia (una por dia, no
+    apilar, ya escuchaste hoy) si se respetan, porque son parte de lo que hay
+    que poder probar — y `ignorar_guardas=true` las saltea cuando lo unico
+    que se esta ajustando es el texto.
     """
-    s, motivo = await harness_sug.elegir(room_id, ignorar_hora=ignorar_hora)
+    s, motivo = await harness_sug.elegir(
+        room_id, ignorar_hora=ignorar_hora, ignorar_apagado=True,
+        ignorar_guardas=ignorar_guardas)
+    base = {"activo": settings.harness_sugerencia_activa}
     if s is None:
-        return {"hay": False, "motivo": motivo}
-    return {"hay": True, "kind": s.kind, "etiqueta": s.etiqueta,
+        return {**base, "hay": False, "motivo": motivo}
+    return {**base, "hay": True, "kind": s.kind, "etiqueta": s.etiqueta,
             "mbids": s.mbids, "goal_id": s.goal_id,
-            "texto": harness_render.sugerencia(s)}
+            "texto": harness_render.sugerencia(s),
+            "botones": [b["text"] for b in
+                        harness_render.botones(harness_sug.Sugerencia(
+                            kind=s.kind, etiqueta=s.etiqueta, mbids=s.mbids,
+                            datos=s.datos, id=0))]}
 
 
 @app.post("/sugerencia", dependencies=[Depends(verify_api_key)])
