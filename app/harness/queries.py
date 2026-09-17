@@ -51,6 +51,12 @@ except Exception:                       # tzdata ausente: no rompas el turno
     TZ = ZoneInfo("UTC")
 
 
+#: El mismo nombre de zona, para las consultas que tienen que decidir "hoy"
+#: del lado de Postgres. La sesion de Neon corre en GMT: `CURRENT_DATE` ahi es
+#: el dia UTC, que a partir de las 21:00 de Cordoba ya es MANANA.
+TZ_NOMBRE = str(TZ)
+
+
 def ahora() -> datetime:
     return datetime.now(TZ)
 
@@ -341,18 +347,32 @@ async def relaciones(artist_mbid, limite: int = LIMITE) -> list[dict]:
 
 
 async def efemerides_hoy(limite: int = 8) -> list[dict]:
+    """Aniversarios de HOY, donde esta el usuario.
+
+    `CURRENT_DATE` es el dia de la SESION de Postgres, y la de Neon corre en
+    GMT. Entre las 21:00 de Cordoba y la medianoche eso ya es el dia
+    siguiente, asi que esta consulta devolvia las efemerides de MANANA — sin
+    fallar, sin avisar, y justo en la franja horaria en que mas se usa el
+    reproductor.
+
+    Es la misma clase de bug que el de `ventana()` en el H2 (`que escuche
+    hoy` vacio despues de las 21), que se arreglo del lado de Python y quedo
+    abierto del lado del SQL. Importa mas ahora: la efemeride es la fuente de
+    mayor prioridad del H5 y el push sale a la tarde.
+    """
     rows = await fetch(
         """
-        SELECT mbid, artist, album, left(release_date, 4) AS anio,
-               (EXTRACT(YEAR FROM CURRENT_DATE)
-                - left(release_date, 4)::int) AS aniversario,
-               weight
-        FROM ephemerides
-        WHERE month_day = to_char(CURRENT_DATE, 'MM-DD')
-          AND release_date IS NOT NULL
-        ORDER BY weight, release_date
+        WITH hoy AS (SELECT (now() AT TIME ZONE $2)::date AS d)
+        SELECT e.mbid, e.artist, e.album, left(e.release_date, 4) AS anio,
+               (EXTRACT(YEAR FROM hoy.d)
+                - left(e.release_date, 4)::int) AS aniversario,
+               e.weight
+        FROM ephemerides e, hoy
+        WHERE e.month_day = to_char(hoy.d, 'MM-DD')
+          AND e.release_date IS NOT NULL
+        ORDER BY e.weight, e.release_date
         LIMIT $1
-        """, limite)
+        """, limite, TZ_NOMBRE)
     return [dict(r) for r in rows]
 
 
