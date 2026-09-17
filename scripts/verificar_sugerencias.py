@@ -166,6 +166,29 @@ async def _correr() -> None:
     check("sin contestar" not in motivo,
           "una ignorada vieja no calla al bot para siempre", motivo)
 
+    print("\n10.5 · la guarda de escucha se mide en HORAS, no en dias")
+    # La version anterior preguntaba por el dia entero. Contra los datos
+    # reales —escucha completa los 6 de 6 dias medidos— eso silenciaba el
+    # bloque TODOS los dias: H5 no habria mandado un solo mensaje y el log lo
+    # habria explicado como correcto.
+    await _limpiar()
+    horas = settings.harness_sugerencia_gracia_horas
+    hubo_hoy = await fetchval(
+        "SELECT 1 FROM play_history WHERE completed AND started_at >= $1 LIMIT 1",
+        ahora.replace(hour=0, minute=0, second=0, microsecond=0))
+    hubo_reciente = await fetchval(
+        "SELECT 1 FROM play_history WHERE completed "
+        "  AND started_at > $1 - make_interval(hours => $2) LIMIT 1",
+        ahora, horas)
+    print(f"        escucha completa hoy: {bool(hubo_hoy)} · "
+          f"en las ultimas {horas} h: {bool(hubo_reciente)}")
+    if hubo_hoy and not hubo_reciente:
+        s, motivo = await sug.elegir(SALA, ignorar_hora=True)
+        check("escuchaste hace menos" not in motivo,
+              "con escucha de hoy pero no reciente, SI manda", motivo)
+    else:
+        print("        (hoy no distingue los dos casos; el assert no aplica)")
+
     print("\n11 · silencio")
     await _limpiar()
     await sug.silenciar(SALA, ahora + timedelta(days=7))

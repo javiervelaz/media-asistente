@@ -6,6 +6,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+#: Default por campo para el validador tolerante de enteros. Va a nivel de
+#: MODULO y no dentro de la clase: pydantic trata cualquier atributo con
+#: guion bajo adelante como ModelPrivateAttr, y el validador recibiria ese
+#: wrapper en vez del dict. (Lo aprendi rompiendo el import con el validador
+#: que existe justamente para que la config no rompa el import.)
+_ENTEROS_H5 = {
+    "harness_sugerencia_dias_repetir": 60,
+    "harness_sugerencia_estante_dias": 90,
+    "harness_sugerencia_min_envios": 10,
+    "harness_sugerencia_gracia_horas": 3,
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -80,6 +92,12 @@ class Settings(BaseSettings):
     # poda con sus propios datos, igual que la etapa 1 crece con turn_log.
     harness_sugerencia_min_aceptacion: float = 0.2
     harness_sugerencia_min_envios: int = 10
+    # Horas desde la ultima escucha completa antes de volver a sugerir. La
+    # guarda anterior era "ya escuchaste HOY", y contra los datos reales eso
+    # silenciaba el bloque para siempre: escucha todos los dias. La intencion
+    # nunca fue "ya tuviste tu musica hoy", era "no me interrumpas si estoy
+    # escuchando" — y eso se mide en horas, no en dias.
+    harness_sugerencia_gracia_horas: int = 3
 
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 
@@ -128,6 +146,29 @@ class Settings(BaseSettings):
                          h, default)
             return default
         return h
+
+    @field_validator("harness_sugerencia_dias_repetir",
+                     "harness_sugerencia_estante_dias",
+                     "harness_sugerencia_min_envios",
+                     "harness_sugerencia_gracia_horas", mode="before")
+    @classmethod
+    def _entero_tolerante(cls, v, info):
+        """Un entero mal tipeado en un campo opcional cae al default y avisa.
+
+        Mismo criterio que `_solo_la_hora`, extendido al resto de los enteros
+        del bloque: `harness_sugerencia_hora=10:30` ya demostro que un typo
+        razonable en cualquiera de estos mata el import de app.config y con el
+        uvicorn entero.
+        """
+        default = _ENTEROS_H5.get(info.field_name, 0)
+        if v is None or v == "":
+            return default
+        try:
+            return int(str(v).strip())
+        except (TypeError, ValueError):
+            logger.error("%s=%r no es un entero; uso %d",
+                         info.field_name, v, default)
+            return default
 
     @field_validator("harness_sugerencia_min_aceptacion", mode="before")
     @classmethod

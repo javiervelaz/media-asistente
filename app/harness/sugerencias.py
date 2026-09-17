@@ -20,6 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from app import player
 from app.config import settings
 from app.db import execute, fetch, fetchrow, fetchval
 from app.harness import goals, queries
@@ -71,6 +72,29 @@ async def silenciar(room_id: str, hasta: datetime) -> None:
         """, room_id, hasta)
 
 
+async def _suena_ahora() -> bool:
+    """Hay musica sonando en este momento?
+
+    Consulta el socket de mpv, no la base: es la pregunta local y barata que
+    expresa de verdad "no me interrumpas".
+
+    Nunca levanta y ante la duda devuelve False: si no se puede consultar mpv,
+    se manda la sugerencia. Callarse por no poder verificar seria darle a una
+    guarda el poder de apagar el bloque entero — que es justo lo que hizo la
+    version anterior.
+    """
+    try:
+        st = await player.get_status()
+    except Exception:
+        logger.debug("no pude consultar mpv; asumo que no suena nada")
+        return False
+    if not st.get("mpv_ok"):
+        return False
+    if st.get("paused"):
+        return False
+    return bool(st.get("playlist_count") or 0)
+
+
 async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
                    ignorar_apagado: bool = False) -> str | None:
     """Devuelve el motivo por el que NO se manda, o None si se puede mandar.
@@ -103,6 +127,15 @@ async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
         return (f"no es la hora (son las {ahora.hour:02d}, "
                 f"manda a las {settings.harness_sugerencia_hora:02d})")
 
+    # Sonando AHORA: la unica lectura de "no me interrumpas" que es correcta.
+    # Consulta el socket de mpv, no la base.
+    #
+    # Falla ABIERTO a proposito: si no se puede saber si suena algo, se manda.
+    # Una guarda rota no puede callar al bot para siempre — es exactamente lo
+    # que hizo la version anterior de esta guarda.
+    if await _suena_ahora():
+        return "estas escuchando ahora"
+
     # --- de aca para abajo, todo consulta la base --------------------------
 
     hasta = await _silencio_hasta(room_id)
@@ -125,12 +158,21 @@ async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
         return (f"la anterior quedo sin contestar "
                 f"(id {pendiente['id']}, {pendiente['enviada_at']:%d/%m})")
 
-    # Si ya escuchaste hoy no hace falta empujar: ya estas usando el bot.
-    escucho = await fetchval(
-        "SELECT 1 FROM play_history WHERE completed AND started_at >= $1 LIMIT 1",
-        desde_hoy)
-    if escucho:
-        return "ya hubo una escucha completa hoy"
+    # Recien terminaste de escuchar: dejalo decantar antes de proponer otra
+    # cosa. En HORAS, no en dias.
+    #
+    # La version anterior preguntaba por el dia entero, y contra los datos
+    # reales —escucha completa los 6 de 6 dias medidos, sesiones que terminan
+    # a media tarde— eso silenciaba el bloque TODOS los dias. H5 no habria
+    # mandado un solo mensaje, y el log lo habria explicado como correcto.
+    # El sintoma de un bloque bien instrumentado que igual no sirve para nada.
+    horas = settings.harness_sugerencia_gracia_horas
+    reciente = await fetchval(
+        "SELECT 1 FROM play_history WHERE completed "
+        "  AND started_at > $1 - make_interval(hours => $2) LIMIT 1",
+        ahora, horas)
+    if reciente:
+        return f"escuchaste hace menos de {horas} h"
 
     return None
 
