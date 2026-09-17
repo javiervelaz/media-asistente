@@ -84,12 +84,15 @@ async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
     mandaria ANTES de prender nada, y con el flag en False contestaba
     "apagado" y nada mas.
     """
+    # --- ORDEN: primero lo que no toca la base -----------------------------
+    #
+    # El cron corre CADA HORA y 23 de las 24 corridas diarias terminan en "no
+    # es la hora". Si esa comprobacion va despues de una consulta, cada una de
+    # esas 23 despierta el compute de Neon —que suspende solo— para no hacer
+    # nada. Las guardas baratas van primero por eso, no por prolijidad.
+
     if not settings.harness_sugerencia_activa and not ignorar_apagado:
         return "apagado (harness_sugerencia_activa = False)"
-
-    hasta = await _silencio_hasta(room_id)
-    if hasta and hasta > ahora:
-        return f"silenciado hasta {hasta:%d/%m %H:%M}"
 
     # La hora se decide en harness_tz, NO en la del proceso. El cron de n8n
     # corre en el VPS y `datetime.now()` del proceso puede estar en UTC: a las
@@ -99,6 +102,12 @@ async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
     if not ignorar_hora and ahora.hour != settings.harness_sugerencia_hora:
         return (f"no es la hora (son las {ahora.hour:02d}, "
                 f"manda a las {settings.harness_sugerencia_hora:02d})")
+
+    # --- de aca para abajo, todo consulta la base --------------------------
+
+    hasta = await _silencio_hasta(room_id)
+    if hasta and hasta > ahora:
+        return f"silenciado hasta {hasta:%d/%m %H:%M}"
 
     desde_hoy = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
 
