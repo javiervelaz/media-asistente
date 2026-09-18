@@ -167,16 +167,7 @@ async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
     # mandado un solo mensaje, y el log lo habria explicado como correcto.
     # El sintoma de un bloque bien instrumentado que igual no sirve para nada.
     horas = settings.harness_sugerencia_gracia_horas
-    # Los casts NO son decorativos: asyncpg prepara el statement y Postgres
-    # infiere los tipos de los parametros por contexto. Sin `$1::timestamptz`
-    # ve `$1 - interval`, deduce que $1 es un interval, y la comparacion
-    # termina siendo `timestamptz > interval` — que no existe. Falla al
-    # preparar, no al ejecutar, asi que ningun dato de prueba lo evita.
-    reciente = await fetchval(
-        "SELECT 1 FROM play_history WHERE completed "
-        "  AND started_at > $1::timestamptz - make_interval(hours => $2::int) "
-        "LIMIT 1",
-        ahora, horas)
+    reciente = await fetchval(SQL_ESCUCHA_RECIENTE, ahora, horas)
     if reciente:
         return f"escuchaste hace menos de {horas} h"
 
@@ -277,6 +268,22 @@ async def _objetivo(room_id: str) -> Sugerencia | None:
                           genero=(e.get("spec") or {}).get("genero", "")),
                       mbids=[], datos=e, goal_id=e.get("id"))
 
+
+#: Los casts NO son decorativos: asyncpg prepara el statement y Postgres
+#: infiere los tipos de los parametros por contexto. Sin `$1::timestamptz` ve
+#: `$1 - interval`, deduce que $1 es un interval, y la comparacion termina
+#: siendo `timestamptz > interval` — que no existe. Falla al PREPARAR, no al
+#: ejecutar, asi que ningun dato de prueba lo evita.
+#:
+#: Vive aca y no inline porque el verificador tambien la usa: cuando estaba
+#: duplicada, arregle una copia y la otra siguio rota — y el bloque de PREPARE
+#: del script validaba la buena mientras el test usaba la mala.
+SQL_ESCUCHA_RECIENTE = """
+SELECT 1 FROM play_history
+WHERE completed
+  AND started_at > $1::timestamptz - make_interval(hours => $2::int)
+LIMIT 1
+"""
 
 SQL_ESTANTE = """
 SELECT e.mbid, e.artist, e.album, left(e.release_date, 4) AS anio

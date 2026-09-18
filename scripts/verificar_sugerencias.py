@@ -36,6 +36,7 @@ logging.basicConfig(level=logging.WARNING,
                     format="%(asctime)s [%(levelname)s] %(message)s")
 
 SALA = "__verificacion__"
+_suena_real = sug._suena_ahora
 FALLOS: list[str] = []
 
 
@@ -55,6 +56,7 @@ async def main() -> int:
     try:
         await _correr()
     finally:
+        sug._suena_ahora = _suena_real
         settings.harness_sugerencia_activa = activa_original
         try:
             await _limpiar()
@@ -72,9 +74,22 @@ async def main() -> int:
     return 0
 
 
+#: `_suena_ahora` consulta mpv de verdad, y mpv es una condicion EXTERNA al
+#: script: si hay musica sonando mientras corre, esa guarda corta antes que
+#: las de la base y los asserts de abajo fallan por algo que no tiene nada que
+#: ver con lo que prueban. Un verificador cuyo resultado depende de si estas
+#: escuchando no verifica nada, asi que se neutraliza y se prueba aparte.
+_SUENA = {"v": False}
+
+
+async def _suena_falso() -> bool:
+    return _SUENA["v"]
+
+
 async def _correr() -> None:
     await _limpiar()
     ahora = queries.ahora()
+    sug._suena_ahora = _suena_falso
 
     print("\n0 · todas las consultas del bloque PREPARAN contra Neon")
     # asyncpg prepara cada statement, y Postgres infiere los tipos de los
@@ -85,9 +100,7 @@ async def _correr() -> None:
     #   operator does not exist: timestamp with time zone > interval
     # Esto lo agarra sin tocar una sola fila.
     consultas = {
-        "escucha reciente":
-            "SELECT 1 FROM play_history WHERE completed "
-            "  AND started_at > $1::timestamptz - make_interval(hours => $2::int) LIMIT 1",
+        "escucha reciente": sug.SQL_ESCUCHA_RECIENTE,
         "silencio":
             "SELECT silencio_hasta FROM sala_prefs WHERE room_id = $1",
         "ya se mando hoy":
@@ -130,6 +143,22 @@ async def _correr() -> None:
           "con el bloque apagado, el preview igual evalua contenido", motivo)
 
     settings.harness_sugerencia_activa = True
+
+    print("\n2.5 · la guarda de mpv: no interrumpir lo que esta sonando")
+    _SUENA["v"] = True
+    s, motivo = await sug.elegir(SALA, ignorar_hora=True)
+    check(s is None and "escuchando ahora" in motivo,
+          "sonando -> no manda", motivo)
+    _SUENA["v"] = False
+
+    # La real, contra el mpv que haya: lo unico que se exige es que NO levante
+    # y devuelva un bool. Falla abierto por diseño — una guarda que no puede
+    # verificar no puede apagar el bloque.
+    try:
+        real = await _suena_real()
+        check(isinstance(real, bool), "_suena_ahora() real devuelve bool", str(real))
+    except Exception as e:
+        check(False, "_suena_ahora() real no levanta", str(e))
 
     print("\n3 · la guarda de hora usa harness_tz, no la del proceso")
     otra = (settings.harness_sugerencia_hora + 3) % 24
@@ -212,10 +241,7 @@ async def _correr() -> None:
     hubo_hoy = await fetchval(
         "SELECT 1 FROM play_history WHERE completed AND started_at >= $1 LIMIT 1",
         ahora.replace(hour=0, minute=0, second=0, microsecond=0))
-    hubo_reciente = await fetchval(
-        "SELECT 1 FROM play_history WHERE completed "
-        "  AND started_at > $1 - make_interval(hours => $2) LIMIT 1",
-        ahora, horas)
+    hubo_reciente = await fetchval(sug.SQL_ESCUCHA_RECIENTE, ahora, horas)
     print(f"        escucha completa hoy: {bool(hubo_hoy)} · "
           f"en las ultimas {horas} h: {bool(hubo_reciente)}")
     if hubo_hoy and not hubo_reciente:
