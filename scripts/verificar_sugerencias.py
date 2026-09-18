@@ -76,6 +76,42 @@ async def _correr() -> None:
     await _limpiar()
     ahora = queries.ahora()
 
+    print("\n0 · todas las consultas del bloque PREPARAN contra Neon")
+    # asyncpg prepara cada statement, y Postgres infiere los tipos de los
+    # parametros por contexto. Un cast faltante falla al PREPARAR, no al
+    # ejecutar: ningun dato de prueba lo evita y no se ve hasta produccion.
+    # `started_at > $1 - make_interval(...)` hacia que Postgres dedujera que
+    # $1 era un interval y reventaba con
+    #   operator does not exist: timestamp with time zone > interval
+    # Esto lo agarra sin tocar una sola fila.
+    consultas = {
+        "escucha reciente":
+            "SELECT 1 FROM play_history WHERE completed "
+            "  AND started_at > $1::timestamptz - make_interval(hours => $2::int) LIMIT 1",
+        "silencio":
+            "SELECT silencio_hasta FROM sala_prefs WHERE room_id = $1",
+        "ya se mando hoy":
+            "SELECT id FROM sugerencias WHERE room_id = $1 AND enviada_at >= $2 "
+            "ORDER BY enviada_at DESC LIMIT 1",
+        "pendiente":
+            "SELECT id, enviada_at FROM sugerencias WHERE room_id = $1 "
+            "AND aceptada IS NULL ORDER BY enviada_at DESC LIMIT 1",
+        "mbids recientes":
+            "SELECT DISTINCT unnest(mbids) AS mbid FROM sugerencias "
+            "WHERE enviada_at > now() - make_interval(days => $1)",
+        "ultimo kind":
+            "SELECT kind FROM sugerencias WHERE room_id = $1 AND enviada_at > $2 "
+            "ORDER BY enviada_at DESC LIMIT 1",
+        "estante": sug.SQL_ESTANTE,
+    }
+    for nombre, q in consultas.items():
+        try:
+            await execute(f"PREPARE __v AS {q}")
+            await execute("DEALLOCATE __v")
+            check(True, f"prepara: {nombre}")
+        except Exception as e:
+            check(False, f"prepara: {nombre}", str(e).split("\n")[0])
+
     print("\n1 · callback_data entra en los 64 bytes de Telegram")
     for i in (1, 1234, 9999999999):
         cb = sug.callback_data(i, True)

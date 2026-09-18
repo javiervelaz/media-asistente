@@ -167,9 +167,15 @@ async def _guardas(room_id: str, ahora: datetime, ignorar_hora: bool,
     # mandado un solo mensaje, y el log lo habria explicado como correcto.
     # El sintoma de un bloque bien instrumentado que igual no sirve para nada.
     horas = settings.harness_sugerencia_gracia_horas
+    # Los casts NO son decorativos: asyncpg prepara el statement y Postgres
+    # infiere los tipos de los parametros por contexto. Sin `$1::timestamptz`
+    # ve `$1 - interval`, deduce que $1 es un interval, y la comparacion
+    # termina siendo `timestamptz > interval` — que no existe. Falla al
+    # preparar, no al ejecutar, asi que ningun dato de prueba lo evita.
     reciente = await fetchval(
         "SELECT 1 FROM play_history WHERE completed "
-        "  AND started_at > $1 - make_interval(hours => $2) LIMIT 1",
+        "  AND started_at > $1::timestamptz - make_interval(hours => $2::int) "
+        "LIMIT 1",
         ahora, horas)
     if reciente:
         return f"escuchaste hace menos de {horas} h"
