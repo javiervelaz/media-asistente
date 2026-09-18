@@ -177,6 +177,30 @@ curl -s -X POST localhost:8000/chat -H "X-API-Key: $API" -H "Content-Type: appli
 sleep 5
 curl -s localhost:8000/status -H "X-API-Key: $API" | jq '{now_playing, paused, position_sec, playlist_count}'
 
+curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "https://media.countercrm.com/sugerencia/preview" | jq
+
+curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" http://127.0.0.1:8000/openapi.json | jq -r '.paths | keys[]' | grep sugerencia
+
+# 1. qué devuelve de verdad, con status y headers
+curl -s -i -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "https://media.countercrm.com/sugerencia/preview" | head -40
+
+# 2. el mismo pedido SIN Cloudflare en el medio
+curl -s -i -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "http://127.0.0.1:8000/sugerencia/preview" | head -40
+
+# qué se mandaría hoy
+curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "http://127.0.0.1:8000/sugerencia/preview" | jq
+
+# solo el texto, salteando las guardas (para iterar la redacción)
+curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "http://127.0.0.1:8000/sugerencia/preview?ignorar_guardas=true" | jq -r '.texto'
+
+curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
+  "http://127.0.0.1:8000/sugerencia/preview?ignorar_guardas=true" | jq -r '.kind, .texto'
+
 capacidad del disco rasp
 df -h / 
 
@@ -186,6 +210,37 @@ systemctl --user restart media-api
 
 source .venv/bin/activate 
 
+tail -40 ~/logs/media-api.log
+
+tail -f ~/logs/media-api.log
+
+https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage
+
+curl -s "https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/getMe" | jq
+
+curl -s "https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage" \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id":937324746,"text":"prueba"}' | jq
+
+
+cd ~/Documents/media-asistente
+MEDIA_API_KEY=$(grep -E '^api_key=' .env | cut -d= -f2- | tr -d '"'"'"' ')
+TOKEN=8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78
+CHAT=937324746
+
+SUG=$(curl -s -H "X-API-Key: $MEDIA_API_KEY" -H "Content-Type: application/json" \
+  -d '{"room_id":"telegram","ignorar_hora":true}' \
+  http://127.0.0.1:8000/sugerencia)
+
+if ! echo "$SUG" | jq -e '.texto' >/dev/null 2>&1; then
+  echo "la API no devolvió una sugerencia:"; echo "$SUG" | jq .
+else
+  echo "$SUG" | jq .
+  curl -s "https://api.telegram.org/bot$TOKEN/sendMessage" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --argjson s "$SUG" --argjson chat "$CHAT" \
+        '{chat_id:$chat, text:$s.texto, reply_markup:{inline_keyboard:[$s.botones]}}')" | jq
+fi
 
 
 
