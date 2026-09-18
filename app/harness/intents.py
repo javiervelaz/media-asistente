@@ -70,6 +70,11 @@ CATALOGO: tuple[Spec, ...] = (
          "volver a poner lo que ya se escucho en un periodo"),
     Spec("coleccion_de_artista",
          "poner lo que hay de un artista en la coleccion en vinilo"),
+    # --- H6: consultar el estante sin reproducirlo ---
+    Spec("coleccion_consulta",
+         "que hay en la coleccion de un artista o de un genero, listado"),
+    Spec("coleccion_por_atributo",
+         "que artistas de un genero, decada o pais hay en la coleccion"),
     Spec("reproducir_disco_coleccion",
          "poner un album entero de la coleccion, en orden"),
     Spec("reproducir_coleccion",
@@ -129,6 +134,8 @@ IMPLEMENTADOS: set[str] = {
     "set_objetivo_genero", "set_objetivo_profundidad",
     # H5
     "silenciar",
+    # H6
+    "coleccion_consulta", "coleccion_por_atributo",
 }
 
 

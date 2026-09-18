@@ -21,9 +21,24 @@ Tres decisiones que vienen de los bugs de los bloques anteriores:
 
 El costo por clasificacion medido en hardware fue 3.231 tokens, no los ~400
 que estimamos: los 16 ejemplos como turnos son ~3.000 tokens de prefijo en
-cada llamada. Por eso el system y el bloque de ejemplos llevan
-`cache_control`: son identicos en todas las llamadas y del segundo turno en
-adelante se leen del cache.
+cada llamada.
+
+El `cache_control` que pusimos para eso NO SIRVIO, y lo dice la telemetria:
+
+    modelo               llamadas   in_prom   cache_prom
+    claude-haiku-4-5           24      3304            0
+    claude-sonnet-4-6          49       303         7575
+
+Cero hits de cache en 24 de 24 llamadas, durante quince dias. El cache
+efimero dura 5 minutos y las clasificaciones estan separadas por horas: cada
+llamada llega a un cache frio, y ademas se paga el 25% extra de escribirlo.
+Sonnet si cachea porque el curador dispara en rafagas dentro de una sesion
+de escucha; el clasificador no tiene rafagas.
+
+La leccion es sobre la herramienta, no sobre el codigo: **el prompt caching
+sirve para prompts frecuentes, no para prompts grandes.** Para un prompt
+grande y esporadico lo unico que baja el costo es que sea mas chico — o no
+llamarlo, que es lo que hace H6 con las 24 frases de coleccion.
 """
 import json
 import logging
@@ -43,6 +58,11 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 INTENTS = [
     "playlist", "reproducir_historial", "reproducir_coleccion",
     "reproducir_disco_coleccion", "coleccion_de_artista",
+    # H6. Casi todo esto lo agarra ahora la etapa 1, pero el enum los tiene
+    # igual: lo que no matchee un patron tiene que poder caer en el intent
+    # correcto en vez de terminar en `playlist`, que es lo que pasaba —
+    # "que tenemos de jazz?" se iba al curador y la respuesta la inventaba.
+    "coleccion_consulta", "coleccion_por_atributo",
     "historial_periodo", "historial_artista",
     "top_escuchados", "salteados", "nunca_escuchado", "discografia",
     "relaciones", "efemerides_hoy", "estado_objetivos",
@@ -69,6 +89,13 @@ DISTINCIONES QUE IMPORTAN:
 · LA COLECCIÓN es su estante de vinilos, distinta del resto de la música.
   "algo de mi colección" → reproducir_coleccion (temas sueltos).
   "un disco de mi colección" → reproducir_disco_coleccion (un álbum entero).
+
+· PREGUNTAR POR LA COLECCIÓN NO ES REPRODUCIRLA. "qué discos de Queen hay
+  en la colección" → coleccion_consulta (lista, y ofrece ponerlo).
+  "poné Queen de mi colección" → coleccion_de_artista (suena ya).
+  "qué artistas de jazz / de los 80 / argentinos tengo" →
+  coleccion_por_atributo. Nunca inventes qué hay en el estante: si no entra
+  en ninguno de estos, es no_entendido.
 
 · UN PEDIDO CURATORIAL es playlist: nombra un artista, un género, un ánimo o
   una época que el sistema tiene que interpretar ("algo tranqui para
@@ -152,17 +179,12 @@ def _mensajes(texto: str) -> list[dict]:
         msgs.append({"role": "user", "content": [{
             "type": "tool_result", "tool_use_id": f"ej_{len(msgs) - 1}",
             "content": "ok"}]})
-    # Los 16 ejemplos son ~3.000 tokens de prefijo IDENTICO en cada llamada.
-    # Sin cachearlos, cada clasificacion los paga enteros: medido, 3.231
-    # tokens por turno en vez de los ~400 que estimamos. Con el breakpoint
-    # aca, del segundo turno en adelante se leen del cache.
-    if msgs:
-        ultimo = msgs[-1]
-        if isinstance(ultimo.get("content"), list):
-            ultimo["content"][-1]["cache_control"] = {"type": "ephemeral"}
-        else:
-            ultimo["content"] = [{"type": "text", "text": ultimo["content"],
-                                  "cache_control": {"type": "ephemeral"}}]
+    # Aca habia un `cache_control` sobre el ultimo ejemplo. Se saco: 24 de 24
+    # llamadas reales midieron cache_read = 0, y escribir un cache que nunca
+    # se lee cuesta 25% mas que no escribirlo. Si algun dia las
+    # clasificaciones pasan a venir en rafaga (varias en menos de 5 minutos),
+    # vuelve a tener sentido — y se va a ver en `turn_log.cached_tokens`
+    # antes de tocar nada.
     msgs.append({"role": "user", "content": texto})
     return msgs
 
@@ -178,8 +200,7 @@ async def clasificar(texto: str) -> tuple[Intent | None, dict]:
         resp = await client.messages.create(
             model=settings.claude_model,
             max_tokens=200,
-            system=[{"type": "text", "text": SYSTEM,
-                     "cache_control": {"type": "ephemeral"}}],
+            system=SYSTEM,
             tools=[TOOL],
             tool_choice={"type": "tool", "name": "clasificar"},
             messages=_mensajes(texto),

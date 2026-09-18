@@ -579,3 +579,50 @@ def silenciado(hasta) -> str:
 def silencio_levantado() -> str:
     return "Listo, vuelvo a escribirte."
 
+
+
+# --- H6: el estante consultable ---------------------------------------------
+
+_DIMENSION = {"genero": "de {v}", "pais": "de {v}", "decada": "de los {v}"}
+
+
+def sin_atributo(dimension: str, valor: str) -> str:
+    """Cero filas es una respuesta, no un error.
+
+    "No tenés nada de X en el estante" es informacion util y verdadera. Lo
+    que no se puede hacer es mandar eso al curador para que invente algo.
+    """
+    como = _DIMENSION.get(dimension, "de {v}").format(v=valor)
+    return (f"En el estante no tengo nada {como}.\n"
+            f"Si querés, puedo armar una playlist con eso — pero sale del "
+            f"catálogo, no de tu colección.")
+
+
+def coleccion_por_atributo(rows: list[dict], dimension: str, valor: str,
+                           ofrecible: bool = False) -> str:
+    como = _DIMENSION.get(dimension, "de {v}").format(v=valor)
+    cuerpo = "\n".join(
+        f"· {r['artista']}"
+        + (f" — {r['discos']} discos" if r["discos"] > 1 else "")
+        + (f" (desde {r['desde']})" if r["desde"] else "")
+        for r in rows[:12])
+    return (f"En el estante, {como} — {len(rows)} artistas:\n{cuerpo}"
+            f"{_mas(len(rows), 12)}" + (OFRECER if ofrecible else ""))
+
+
+def discos_en_coleccion(rows: list[dict], artista: str,
+                        ofrecible: bool = False) -> str:
+    """Lo que hay de un artista en el estante. Lista: no reproduce.
+
+    El ✓ marca lo que ya escuchaste entero. Es la unica columna que ningun
+    servicio de streaming puede mostrarte, porque no sabe que tenes.
+    """
+    cuerpo = "\n".join(
+        f"· {'✓' if r['escuchado'] else '·'} {r['album']}"
+        + (f" ({r['anio']})" if r["anio"] else "")
+        + ("" if r["tracks"] else "  — sin tracklist")
+        for r in rows[:15])
+    sin_oir = sum(1 for r in rows if not r["escuchado"])
+    pie = f"\n\n{sin_oir} sin escuchar entero." if sin_oir else ""
+    return (f"De {artista} tenés {len(rows)} en el estante:\n{cuerpo}"
+            f"{_mas(len(rows), 15)}{pie}" + (OFRECER if ofrecible else ""))

@@ -697,3 +697,185 @@ async def coleccion_de_artista(artist_mbid, limite: int = 14) -> list[dict]:
         LIMIT $2
         """, artist_mbid, limite)
     return [dict(r) for r in rows]
+
+
+# --- H6: el estante consultable ---------------------------------------------
+#
+# 24 de los 27 turnos que pagaron el clasificador en 30 dias son la misma
+# pregunta con quince redacciones: que hay en el estante. El estante tiene
+# 623 artistas y 613 con tags, 622 con pais, 618 con anio — 98% de cobertura
+# en los tres atributos que se preguntan. No hace falta hidratar nada.
+
+#: Paises en las palabras del usuario -> ISO 3166-1 alpha-2, que es lo que
+#: guarda MusicBrainz en `artists.country`. Cerrado y corto: solo los que
+#: aparecen en el estante mas los que un argentino va a preguntar.
+PAISES = {
+    "argentina": "AR", "argentinos": "AR", "argentino": "AR",
+    "estados unidos": "US", "eeuu": "US", "usa": "US",
+    "norteamericanos": "US", "yanquis": "US", "americanos": "US",
+    "inglaterra": "GB", "reino unido": "GB", "ingleses": "GB",
+    "britanicos": "GB", "britanico": "GB", "ingles": "GB", "uk": "GB",
+    "irlanda": "IE", "irlandeses": "IE", "canada": "CA", "canadienses": "CA",
+    "francia": "FR", "franceses": "FR", "alemania": "DE", "alemanes": "DE",
+    "brasil": "BR", "brasileros": "BR", "brasilenos": "BR",
+    "australia": "AU", "australianos": "AU", "jamaica": "JM",
+    "suecia": "SE", "islandia": "IS", "sudafrica": "ZA",
+    "espana": "ES", "espanoles": "ES", "mexico": "MX", "mexicanos": "MX",
+}
+
+_DECADA = re.compile(r"^(?:los\s+|la\s+decada\s+de\s+(?:los\s+)?)?"
+                     r"(?:anios?\s+)?(?P<n>\d{2,4})s?$")
+
+
+def clasificar_atributo(valor: str) -> tuple[str, object] | None:
+    """Que dimension es `valor`: decada, pais o genero. Sin LLM.
+
+    El orden importa y no es arbitrario: una decada es un numero (no puede
+    confundirse), un pais esta en una lista cerrada, y lo que sobra es un
+    tag. El tag no se valida aca a proposito — si no existe en el estante,
+    la consulta devuelve cero filas y eso se renderiza como "no tengo nada
+    de X", que es la respuesta honesta.
+    """
+    v = (valor or "").strip().lower()
+    if not v:
+        return None
+
+    m = _DECADA.match(v)
+    if m:
+        n = int(m.group("n"))
+        if n < 100:                      # "los 80" / "los 90"
+            n += 1900 if n >= 30 else 2000
+        return ("decada", n - n % 10)
+
+    if v in PAISES:
+        return ("pais", PAISES[v])
+
+    return ("genero", v)
+
+
+SQL_ATTR = {
+    # `array_position` ordena por el rango del tag en MusicBrainz, que viene
+    # por votos. Sin eso, "jazz" devolvia a Bob Dylan y Madonna primero —
+    # tienen el tag en el puesto 12 — y a Dave Brubeck en la pagina 2.
+    "genero": """
+        SELECT a.name AS artista,
+               count(DISTINCT r.mbid)::int AS discos,
+               min(left(e.release_date, 4)) AS desde,
+               array_position(a.tags, $1::text) AS rango
+        FROM ephemerides e
+        JOIN releases r ON r.mbid = e.mbid::uuid
+        JOIN artists  a ON a.mbid = r.artist_mbid
+        WHERE e.weight = 1 AND a.tags @> ARRAY[$1::text]
+        GROUP BY a.name, rango
+        ORDER BY rango, discos DESC, a.name
+        LIMIT $2::int
+    """,
+    "pais": """
+        SELECT a.name AS artista,
+               count(DISTINCT r.mbid)::int AS discos,
+               min(left(e.release_date, 4)) AS desde,
+               NULL::int AS rango
+        FROM ephemerides e
+        JOIN releases r ON r.mbid = e.mbid::uuid
+        JOIN artists  a ON a.mbid = r.artist_mbid
+        WHERE e.weight = 1 AND a.country = $1::text
+        GROUP BY a.name
+        ORDER BY discos DESC, a.name
+        LIMIT $2::int
+    """,
+    # Por el anio del DISCO, no por `begin_year` del artista: "artistas de
+    # los 80" es quien sacaba discos en los 80, no quien empezo en los 80.
+    # Bowie no es un artista de los 60 porque arranco en el 62.
+    "decada": """
+        SELECT a.name AS artista,
+               count(DISTINCT r.mbid)::int AS discos,
+               min(left(e.release_date, 4)) AS desde,
+               NULL::int AS rango
+        FROM ephemerides e
+        JOIN releases r ON r.mbid = e.mbid::uuid
+        JOIN artists  a ON a.mbid = r.artist_mbid
+        WHERE e.weight = 1
+          AND left(e.release_date, 4) ~ '^[0-9]{4}$'
+          AND left(e.release_date, 4)::int BETWEEN $1::int AND $1::int + 9
+        GROUP BY a.name
+        ORDER BY discos DESC, a.name
+        LIMIT $2::int
+    """,
+}
+
+
+async def coleccion_por_atributo(dimension: str, valor,
+                                 limite: int = LIMITE) -> list[dict]:
+    """Artistas del estante que cumplen un atributo."""
+    sql = SQL_ATTR.get(dimension)
+    if sql is None:
+        return []
+    rows = await fetch(sql, valor, limite)
+    return [dict(r) for r in rows]
+
+
+# Los mbids que se OFRECEN se consultan aparte, no derivando la consulta de
+# arriba con un `replace`. Lo intente y reprodujo el sesgo alfabetico del
+# hallazgo 7: agrupando por release todos los discos valen 1, el
+# `ORDER BY discos DESC, a.name` queda decidido por el nombre, y los seis
+# que ofrecia eran 808 State, ABBA, ABC, AC/DC... Ordenar una lista para
+# mirar y una cola para reproducir son dos criterios distintos.
+_SQL_MBIDS_BASE = """
+    SELECT e.mbid
+    FROM ephemerides e
+    JOIN releases r ON r.mbid = e.mbid::uuid
+    JOIN artists  a ON a.mbid = r.artist_mbid
+    WHERE e.weight = 1 AND {filtro}
+    ORDER BY random()
+    LIMIT $2::int
+"""
+
+SQL_MBIDS_ATTR = {
+    "genero": _SQL_MBIDS_BASE.format(filtro="a.tags @> ARRAY[$1::text]"),
+    "pais":   _SQL_MBIDS_BASE.format(filtro="a.country = $1::text"),
+    "decada": _SQL_MBIDS_BASE.format(
+        filtro="left(e.release_date, 4) ~ '^[0-9]{4}$' "
+               "AND left(e.release_date, 4)::int "
+               "BETWEEN $1::int AND $1::int + 9"),
+}
+
+
+async def releases_por_atributo(dimension: str, valor,
+                                limite: int = 6) -> list[str]:
+    """Los mbids concretos que se ofrecen al listar.
+
+    Se guardan los mbids OFRECIDOS, no el criterio: si el "dale" recalculara
+    la busqueda podrias recibir algo distinto de lo que viste. Misma leccion
+    que H2.1 y H5.
+    """
+    sql = SQL_MBIDS_ATTR.get(dimension)
+    if sql is None:
+        return []
+    rows = await fetch(sql, valor, limite)
+    return [r["mbid"] for r in rows if r.get("mbid")]
+
+
+async def discos_de_artista_en_coleccion(artist_mbid,
+                                         limite: int = LIMITE) -> list[dict]:
+    """Los discos (no los tracks) de un artista que estan en el estante.
+
+    `coleccion_de_artista` devuelve tracks porque REPRODUCE. Esta lista, que
+    es lo que pide una pregunta: "que discos de Queen hay en la coleccion".
+    """
+    rows = await fetch(
+        """
+        SELECT e.mbid, e.album, left(e.release_date, 4) AS anio,
+               (SELECT count(*) FROM recordings rc
+                 WHERE rc.release_mbid = e.mbid::uuid)::int AS tracks,
+               EXISTS (
+                 SELECT 1 FROM recordings rc
+                 JOIN play_history ph ON ph.recording_mbid = rc.mbid
+                 WHERE rc.release_mbid = e.mbid::uuid AND ph.completed
+               ) AS escuchado
+        FROM ephemerides e
+        JOIN releases r ON r.mbid = e.mbid::uuid
+        WHERE e.weight = 1 AND r.artist_mbid = $1
+        ORDER BY e.release_date NULLS LAST
+        LIMIT $2::int
+        """, artist_mbid, limite)
+    return [dict(r) for r in rows]

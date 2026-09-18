@@ -481,6 +481,64 @@ async def _coleccion_de_artista(intent: Intent, st: SessionState) -> Result:
                   data={"count": len(tracks)}, actions=["playlist"])
 
 
+# --- H6: consultar el estante sin pisarte la musica -------------------------
+
+async def _coleccion_por_atributo(intent: Intent, st: SessionState) -> Result:
+    """Artistas del estante por genero, decada o pais. Cero tokens."""
+    valor = (intent.slots.get("valor") or "").strip()
+    par = queries.clasificar_atributo(valor)
+    if not par:
+        return Result(render.no_entendido(), ok=False)
+
+    dimension, clave = par
+    rows = await queries.coleccion_por_atributo(dimension, clave)
+    if not rows:
+        return Result(render.sin_atributo(dimension, valor),
+                      data={"dimension": dimension, "valor": valor})
+
+    mbids = await queries.releases_por_atributo(dimension, clave)
+    if mbids:
+        st.ofrecer("reproducir_releases", f"algo de {valor}", mbids=mbids)
+    return Result(render.coleccion_por_atributo(rows, dimension, valor,
+                                                ofrecible=bool(mbids)),
+                  data={"count": len(rows), "dimension": dimension})
+
+
+async def _coleccion_consulta(intent: Intent, st: SessionState) -> Result:
+    """"Que hay de X en la coleccion" — X puede ser un artista o un genero.
+
+    El sustantivo no desambigua ("que discos de Queen" vs "cuantas canciones
+    de jazz"), asi que no lo decide un modelo: se busca el artista primero y
+    si no esta en el estante se prueba como atributo. Determinista, y las dos
+    ramas salen de la base.
+    """
+    valor = (intent.slots.get("valor") or "").strip()
+    if not valor:
+        return Result(render.no_entendido(), ok=False)
+
+    a = await queries.resolver_artista(valor)
+    if a:
+        discos = await queries.discos_de_artista_en_coleccion(a["mbid"])
+        if discos:
+            st.tocar(last_artist=a["name"], last_artist_mbid=str(a["mbid"]))
+            mbids = [d["mbid"] for d in discos if d.get("mbid")]
+            if mbids:
+                st.ofrecer("reproducir_releases", f"lo de {a['name']}",
+                           mbids=mbids)
+            return Result(
+                render.discos_en_coleccion(discos, a["name"],
+                                           ofrecible=bool(mbids)),
+                data={"count": len(discos)})
+        # El artista existe en el grafo pero no en el estante. Eso es una
+        # respuesta, no un fallo: se dice y se termina.
+        if queries.clasificar_atributo(valor)[0] == "genero" and \
+                not await queries.coleccion_por_atributo("genero", valor.lower()):
+            return Result(render.sin_artista_en_coleccion(a["name"]),
+                          data={"sin_artista_en_coleccion": a["name"]})
+
+    return await _coleccion_por_atributo(intent, st)
+
+
 async def _reproducir_disco_coleccion(intent, st: SessionState) -> Result:
     """Un album entero de tu coleccion, en orden.
 
@@ -585,6 +643,8 @@ EJECUTORES: dict[str, Callable[[Intent, SessionState], Awaitable[Result]]] = {
     "reproducir_coleccion": _reproducir_coleccion,
     "reproducir_disco_coleccion": _reproducir_disco_coleccion,
     "coleccion_de_artista": _coleccion_de_artista,
+    "coleccion_consulta": _coleccion_consulta,
+    "coleccion_por_atributo": _coleccion_por_atributo,
     "rechazar": _rechazar,
     "no_entendido": _no_entendido,
 }
