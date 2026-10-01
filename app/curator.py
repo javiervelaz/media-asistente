@@ -446,9 +446,18 @@ def _parse(resp, vistos: dict | None = None, n_tracks: int = 20) -> dict:
     data["tracks"] = validos
     data["metrics"] = metricas
 
-    logger.info("playlist %r: %d tracks (%d verificados, %d libres)",
+    # Que mando el modelo, no que guardamos nosotros. H7 le pidio mbid +
+    # rationale y el output medido casi no bajo: sin esta linea no hay forma
+    # de saber si sigue transcribiendo o si el rationale es el peso.
+    con_nombre = sum(1 for t in tracks
+                     if isinstance(t, dict) and (t.get("artist") or t.get("title")))
+    rat = [len(str(t.get("rationale") or "")) for t in tracks if isinstance(t, dict)]
+    logger.info("playlist %r: %d tracks (%d verificados, %d libres) · "
+                "salida: %d/%d con artist|title, rationale %d chars prom",
                 data.get("title"), len(validos),
-                metricas["verificados"], metricas["libres"])
+                metricas["verificados"], metricas["libres"],
+                con_nombre, len(tracks),
+                sum(rat) // max(len(rat), 1))
     return data
 
 

@@ -151,17 +151,39 @@ def main() -> int:
     print(f"\nla escritura de caché es el {100*cw/tot['usd']:.0f}% del gasto")
     print(f"herramientas por vuelta a la API: {tot['tools']/max(tot['api'],1):.1f}")
     print(f"herramientas por vuelta a la API: {tot['tools']/max(tot['api'],1):.1f}")
+
+    # El veredicto NO se saca del promedio de la muestra. La primera version
+    # de esto promediaba 18 playlists de antes de H7 con 2 de despues, daba
+    # alb/ll = 1.1 y concluia que el modelo no agrupaba — cuando las dos
+    # nuevas agrupaban 4 y 6 albumes por llamada. Un promedio que cruza un
+    # cambio de codigo no mide el cambio: lo diluye.
+    def _alb(p):
+        l = p.get("lotes") or []
+        return sum(l) / len(l) if l else 0.0
+
+    pre = [p for p in muestra if 0 < _alb(p) <= 1.0]
+    post = [p for p in muestra if _alb(p) > 1.0]
     print()
-    if alb == "—":
-        print("alb/ll en '—': no hay mbids en los argumentos de get_recordings.")
-        print("El log es de antes de H7, o la Pi corre el código viejo.")
-    elif float(alb) < 1.5:
-        print(f"alb/ll = {alb}: el código nuevo está vivo pero el modelo sigue")
-        print("pidiendo los álbumes DE UNO. El batch existe y no se usa — eso")
-        print("no se arregla con una descripción más insistente, se arregla")
-        print("quitándole la opción o devolviéndole los tracks antes.")
+    if pre and post:
+        print("La muestra cruza H7. Los promedios de arriba no sirven para")
+        print("comparar; estos sí:")
+        print(f"{'':12}{'n':>3} {'tools':>6} {'API':>5} {'alb/ll':>7} "
+              f"{'out':>6} {'seg':>7} {'USD':>7}")
+        for etq, grupo in (("antes", pre), ("después", post)):
+            k = len(grupo)
+            api = lambda p: len([a for a in p["api"] if a is not None])
+            print(f"{etq:12}{k:3} {sum(len(p['tools']) for p in grupo)/k:6.1f} "
+                  f"{sum(api(p) for p in grupo)/k:5.1f} "
+                  f"{sum(_alb(p) for p in grupo)/k:7.1f} "
+                  f"{sum(p['out'] for p in grupo)/k:6.0f}")
+        print("\nY con --desde se mide una sola época por corrida, que es como")
+        print("hay que hacerlo.")
+    elif not post:
+        print("Ninguna playlist agrupó álbumes: o el log es de antes de H7, o")
+        print("la Pi corre el código viejo.")
     else:
-        print(f"alb/ll = {alb}: el modelo está agrupando. H7 funcionando.")
+        print(f"Todas agrupan ({sum(_alb(p) for p in post)/len(post):.1f} "
+              f"álbumes por llamada). H7 vivo.")
     return 0
 
 
