@@ -126,6 +126,40 @@ async def query_releases(artist_mbids: list[str] | None = None,
             for r in rows]
 
 
+#: Techo de albumes por llamada. No es arbitrario: con `MAX_TOOL_RESULT` en
+#: 4.000 caracteres, mas de esto se trunca y el modelo recibe menos tracks de
+#: los que pidio sin que nada falle ruidosamente.
+MAX_ALBUMES = 6
+
+
+async def get_recordings_batch(release_mbids: list[str]) -> dict:
+    """Tracklists de VARIOS albumes en una sola llamada.
+
+    Medido sobre 20 playlists del log: 13,7 herramientas y 6,3 vueltas a la
+    API por playlist, a 2,2 herramientas por vuelta. Casi todas son este
+    `get_recordings`, uno por album. Las dos playlists mas baratas del log
+    usaron 3 y 5 herramientas y costaron USD 0,040 y 0,059; las peores
+    usaron 19 y 24 y costaron 0,207 y 0,106. Cinco veces de diferencia en
+    plata y en tiempo, y lo unico que cambia es cuantas veces pregunta.
+
+    Cada vuelta relee el prefijo cacheado entero, asi que mas vueltas no es
+    solo mas latencia: encarece TODAS las llamadas siguientes.
+    """
+    pedidos = [m for m in dict.fromkeys(release_mbids or []) if m][:MAX_ALBUMES]
+    albumes = []
+    for mbid in pedidos:
+        try:
+            albumes.append(await get_recordings(mbid))
+        except Exception as e:
+            # Un album que falla no puede tirar el batch entero: el modelo se
+            # queda sin los otros cinco y vuelve a pedirlos de uno, que es
+            # exactamente lo que estamos tratando de evitar.
+            logger.warning("get_recordings(%s) fallo en el batch: %s", mbid, e)
+            albumes.append({"release_mbid": mbid, "error": str(e)[:120],
+                            "tracks": []})
+    return {"albums": albumes}
+
+
 async def get_recordings(release_mbid: str) -> dict:
     """Tracklist de un album, con el artista al que pertenece.
 
@@ -146,7 +180,7 @@ async def get_recordings(release_mbid: str) -> dict:
 
     rows = await fetch(
         """
-        SELECT r.mbid, r.title, r.position, r.length_ms,
+        SELECT r.mbid, r.title, r.length_ms,
                (tr.recording_mbid IS NOT NULL AND tr.fail_count < 3) AS listo
         FROM recordings r
         LEFT JOIN track_resolutions tr ON tr.recording_mbid = r.mbid
@@ -161,6 +195,7 @@ async def get_recordings(release_mbid: str) -> dict:
     return {
         "artist": cab["artist"] if cab else None,
         "artist_mbid": str(cab["artist_mbid"]) if cab else None,
+        "release_mbid": str(release_mbid),
         "release": cab["release"] if cab else None,
         "tracks": tracks,
     }
@@ -185,6 +220,6 @@ TOOL_IMPL = {
     "search_artist": search_artist,
     "get_artist_graph": get_artist_graph,
     "query_releases": query_releases,
-    "get_recordings": get_recordings,
+    "get_recordings": get_recordings_batch,
     "get_play_history": get_play_history,
 }

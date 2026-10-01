@@ -11,12 +11,20 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 MAX_TOKENS = 8192
 MAX_TOOL_RESULT = 4_000   # truncado para no inflar el contexto en cada turno
+
+#: Tope propio para el batch de tracklists. Seis albumes no entran en 4.000
+#: caracteres, y con el tope comun `_truncar` caia en la rama del final: le
+#: devolvia un `preview` sin tracklists y el modelo volvia a pedir los albumes
+#: de uno en uno, que es exactamente lo que H7 saca. Son ~3.000 tokens que
+#: ademas quedan cacheados: cuestan USD 0,001 por relectura contra los USD
+#: 0,06 que cuesta una vuelta extra.
+MAX_TOOL_RESULT_BATCH = 12_000
 MIN_PLAYLIST = 8          # piso: por debajo, la cuota de libres cede
 MAX_POR_ARTISTA = 2       # techo base; sube solo si no hay variedad disponible
 RESERVA_NOTA = 200        # espacio para la nota de truncamiento
 
 
-def _truncar(out) -> str:
+def _truncar(out, tope: int = MAX_TOOL_RESULT) -> str:
     """Serializa un tool result sin cortarlo a mitad de token JSON.
 
     Cortar por caracteres le entrega al modelo un JSON invalido y sin marca
@@ -24,12 +32,12 @@ def _truncar(out) -> str:
     decimos explicitamente cuantos quedaron afuera.
     """
     txt = json.dumps(out, default=str)
-    if len(txt) <= MAX_TOOL_RESULT:
+    if len(txt) <= tope:
         return txt
 
     if isinstance(out, list):
         items = list(out)
-        while items and len(json.dumps(items, default=str)) > MAX_TOOL_RESULT - RESERVA_NOTA:
+        while items and len(json.dumps(items, default=str)) > tope - RESERVA_NOTA:
             items.pop()
         logger.info("tool result truncado: %d de %d elementos", len(items), len(out))
         return json.dumps({
@@ -40,11 +48,13 @@ def _truncar(out) -> str:
         }, default=str)
 
     if isinstance(out, dict):
-        for clave in ("conectados", "items", "tracks"):
+        # `albums` va primero: es la clave del batch de H7, y sin ella un
+        # batch grande caia en la rama del final y perdia todos los tracks.
+        for clave in ("albums", "conectados", "items", "tracks"):
             if isinstance(out.get(clave), list):
                 recorte = dict(out)
                 items = list(out[clave])
-                while items and len(json.dumps({**recorte, clave: items}, default=str)) > MAX_TOOL_RESULT - RESERVA_NOTA:
+                while items and len(json.dumps({**recorte, clave: items}, default=str)) > tope - RESERVA_NOTA:
                     items.pop()
                 recorte[clave] = items
                 recorte["truncado"] = True
@@ -58,7 +68,7 @@ def _truncar(out) -> str:
     return json.dumps({
         "truncado": True,
         "nota": "El resultado era demasiado grande. Pedi menos datos.",
-        "preview": txt[:MAX_TOOL_RESULT - RESERVA_NOTA],
+        "preview": txt[:tope - RESERVA_NOTA],
     })
 
 
@@ -136,8 +146,12 @@ TOOLS = [
     {
         "name": "get_recordings",
         "description": (
-            "Tracklist de un álbum: artista, y mbid, duración y disponibilidad "
-            "de cada track. Si no está en la base la trae de MusicBrainz. "
+            "Tracklists de HASTA 6 ÁLBUMES EN UNA SOLA LLAMADA: artista, y "
+            "mbid, duración y disponibilidad de cada track. Si alguno no está "
+            "en la base lo trae de MusicBrainz. "
+            "Pasá TODOS los álbumes que te interesen juntos en `release_mbids`: "
+            "pedirlos de uno en uno multiplica la espera del usuario, porque "
+            "cada vuelta vuelve a leer la conversación entera. "
             "SOLO podés incluir en la playlist tracks que hayas visto acá: "
             "el recording_mbid es lo que permite verificar que existen. "
             "`listo: true` significa que el track ya está resuelto y arranca "
@@ -145,8 +159,15 @@ TOOLS = [
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"release_mbid": {"type": "string"}},
-            "required": ["release_mbid"],
+            "properties": {
+                "release_mbids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 6,
+                    "description": "mbids de los álbumes, todos juntos",
+                },
+            },
+            "required": ["release_mbids"],
         },
     },
     {
@@ -185,7 +206,9 @@ Criterios de curaduría:
 - Evitá compilados, versiones en vivo y remixes salvo pedido explícito.
 - Priorizá álbumes con weight 1 (la colección del usuario) cuando encajen.
 
-No hagas más de 10 llamadas a herramientas. Cuando tengas material suficiente, cerrá.
+No hagas más de 10 llamadas a herramientas, y agrupá: los álbumes van todos
+juntos en un `get_recordings`. Cada vuelta vuelve a leer la conversación entera,
+así que pedir de uno en uno es tiempo que el usuario espera mirando el teléfono.
 
 Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
 {
@@ -193,20 +216,28 @@ Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
   "concept": "la tesis en una frase",
   "narration": "2-3 frases para leer en voz alta antes de arrancar. Español rioplatense, tono de quien sabe de música y no la hace larga.",
   "tracks": [
-    {"artist": "...", "title": "...", "recording_mbid": null, "length_ms": null,
-     "rationale": "una frase: por qué está y por qué en esta posición"}
+    {"recording_mbid": "...", "rationale": "una frase: por qué está y por qué en esta posición"}
   ]
 }
-Antes de armar la lista final, pasá get_recordings por TODOS los álbumes de los
-que vayas a sacar tracks, y elegí únicamente entre los tracks que viste ahí.
-El recording_mbid es lo que hace verificable un track: sin él no hay forma de
-saber si existe, y YouTube siempre devuelve algo, así que un tema inventado no
-falla —suena—. Si un álbum que te interesa no tiene tracklist cargada, traela:
-para eso está la herramienta.
+
+**Un track se identifica por su `recording_mbid` y nada más.** No repitas el
+artista, el título ni la duración: ya los tengo, me los dio la misma base que
+te los dio a vos, y escribirlos de vuelta es tiempo que el usuario espera.
+
+La única excepción es un track que NO viste en ningún `get_recordings` y que
+igual querés incluir porque sabés que existe. Ese va sin mbid y con artista y
+título, que es lo único con lo que puedo buscarlo:
+    {"artist": "...", "title": "...", "rationale": "..."}
+Usalo poco y a conciencia: YouTube siempre devuelve *algo*, así que un tema
+inventado no falla ruidosamente —suena—, y suena mal.
+
+Antes de armar la lista final pasá por `get_recordings` todos los álbumes de
+los que vayas a sacar tracks, y elegí únicamente entre esos tracks. Si un álbum
+que te interesa no tiene tracklist cargada, traela: para eso está la
+herramienta.
 
 Una playlist de 14 tracks reales vale más que una de 20 con 6 inventados.
-Incluí recording_mbid y length_ms tal como te los dio get_recordings.
-Mantené cada rationale en una sola frase corta: la respuesta tiene que entrar completa."""
+Mantené cada rationale en una sola frase corta."""
 
 # System como lista de bloques, con breakpoint de cache
 SYSTEM_BLOCKS = [{
@@ -227,17 +258,27 @@ def _registrar_vistos(nombre: str, args: dict, out, vistos: dict) -> None:
     """
     if nombre != "get_recordings" or not isinstance(out, dict):
         return
-    artist = out.get("artist")
-    artist_mbid = out.get("artist_mbid")
-    for tr in out.get("tracks") or []:
-        mbid = str(tr.get("mbid") or "").strip()
-        if mbid:
-            vistos[mbid] = {
-                "artist": artist,
-                "artist_mbid": artist_mbid,
-                "title": tr.get("title"),
-                "length_ms": tr.get("length_ms"),
-            }
+    # Desde H7 la herramienta devuelve varios albumes. Se acepta la forma
+    # vieja de un album suelto para no depender de que las dos cosas se
+    # desplieguen juntas: un tool result con otra forma seria un `vistos`
+    # vacio, y un `vistos` vacio apaga la verificacion entera sin fallar.
+    albumes = out.get("albums")
+    if not isinstance(albumes, list):
+        albumes = [out]
+    for alb in albumes:
+        if not isinstance(alb, dict):
+            continue
+        artist = alb.get("artist")
+        artist_mbid = alb.get("artist_mbid")
+        for tr in alb.get("tracks") or []:
+            mbid = str(tr.get("mbid") or "").strip()
+            if mbid:
+                vistos[mbid] = {
+                    "artist": artist,
+                    "artist_mbid": artist_mbid,
+                    "title": tr.get("title"),
+                    "length_ms": tr.get("length_ms"),
+                }
 
 
 def _mover_breakpoint(mensajes: list) -> None:
@@ -308,7 +349,12 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
             resultados.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
-                "content": _truncar(out),
+                # El batch de tracklists tiene su propio tope: es el unico
+                # tool result que el modelo necesita entero.
+                "content": _truncar(
+                    out,
+                    MAX_TOOL_RESULT_BATCH if block.name == "get_recordings"
+                    else MAX_TOOL_RESULT),
             })
 
         mensajes.append({"role": "user", "content": resultados})
@@ -375,15 +421,28 @@ def _parse(resp, vistos: dict | None = None, n_tracks: int = 20) -> dict:
     if not tracks or not isinstance(tracks, list):
         raise ValueError("el curador devolvió una playlist vacía o mal formada")
 
-    # Descartamos tracks incompletos en vez de romper toda la playlist
-    validos = [t for t in tracks
-               if isinstance(t, dict) and t.get("artist") and t.get("title")]
+    # Un track es util si se puede identificar: o trae un mbid que salio de un
+    # tool result —y entonces el artista y el titulo los pone la base—, o trae
+    # artista y titulo para buscarlo en YouTube. Desde H7 el modelo manda solo
+    # el mbid, asi que este filtro TIENE que correr sabiendo que `vistos`
+    # existe: antes exigia artist y title siempre, y con la salida nueva
+    # habria descartado la playlist entera.
+    conocidos = vistos or {}
+    validos = []
+    for t in tracks:
+        if not isinstance(t, dict):
+            continue
+        mbid = str(t.get("recording_mbid") or "").strip()
+        if mbid in conocidos or (t.get("artist") and t.get("title")):
+            validos.append(t)
     if not validos:
-        raise ValueError("ningún track tiene artist y title")
+        raise ValueError("ningún track se puede identificar: "
+                         "sin recording_mbid conocido y sin artist/title")
     if len(validos) < len(tracks):
-        logger.warning("descartados %d tracks mal formados", len(tracks) - len(validos))
+        logger.warning("descartados %d tracks sin forma de identificarlos",
+                       len(tracks) - len(validos))
 
-    validos, metricas = _clasificar(validos, vistos or {}, n_tracks)
+    validos, metricas = _clasificar(validos, conocidos, n_tracks)
     data["tracks"] = validos
     data["metrics"] = metricas
 
@@ -408,8 +467,11 @@ def _clasificar(tracks: list[dict], vistos: dict,
         if ref:
             t["origen"] = "verificado"
             # El modelo a veces transcribe mal el titulo: mandamos el de la base
-            t["title"] = ref["title"] or t["title"]
-            t["artist"] = ref["artist"] or t["artist"]
+            # `.get` y no `t["title"]`: desde H7 el modelo no manda esas
+            # claves para un track verificado, y el `or t["title"]` del
+            # codigo viejo era un KeyError esperando el deploy.
+            t["title"] = ref["title"] or t.get("title")
+            t["artist"] = ref["artist"] or t.get("artist")
             t["artist_mbid"] = ref.get("artist_mbid")
             if t.get("length_ms") is None:
                 t["length_ms"] = ref["length_ms"]
