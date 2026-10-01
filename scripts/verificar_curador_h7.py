@@ -111,6 +111,41 @@ def main() -> int:
     check(bool(libre) and libre[0]["artist"] == "Alguien",
           "el libre conserva artista y título, que es con lo que se busca")
 
+    print("\n5 · H7.1: la entrega como herramienta")
+    from app.curator import ENTREGA
+    it = ENTREGA["input_schema"]["properties"]["tracks"]["items"]
+    check(it["additionalProperties"] is False,
+          "el schema del track cierra la puerta a campos extra")
+    check("artist" not in it["properties"] and "title" not in it["properties"],
+          "artist y title no existen como campos del schema")
+    check(sorted(it["properties"]) == ["busqueda", "rationale", "recording_mbid"],
+          "un track se identifica por mbid, o por una sola `busqueda`")
+    from app.tools import TOOL_IMPL
+    check(ENTREGA["name"] not in TOOL_IMPL,
+          "la entrega no es un TOOL_IMPL: termina el loop, no se ejecuta")
+
+    # El camino de la herramienta: `_armar` directo, sin parsear texto.
+    d = c._armar({"title": "T", "concept": "c", "narration": "n",
+                  "tracks": [{"recording_mbid": m, "rationale": "r"}
+                             for m in mbids]}, vistos, 10)
+    check(len(d["tracks"]) == 6 and d["metrics"]["verificados"] == 6,
+          "la entrega por herramienta se enriquece igual que el texto")
+
+    # `busqueda` se abre en artist/title: abajo todos esperan los dos.
+    d = c._armar({"title": "T", "concept": "c", "narration": "n",
+                  "tracks": [{"recording_mbid": mbids[0], "rationale": "a"},
+                             {"busqueda": "Pescado Rabioso — Post Crucifixión",
+                              "rationale": "b"}]}, vistos, 10)
+    libre = [t for t in d["tracks"] if t["origen"] == "libre"]
+    check(len(libre) == 1 and libre[0]["artist"] == "Pescado Rabioso"
+          and libre[0]["title"] == "Post Crucifixión",
+          "`busqueda` se parte en artista y título")
+    d = c._armar({"title": "T", "concept": "c", "narration": "n",
+                  "tracks": [{"busqueda": "Solo un titulo", "rationale": "b"}]},
+                 vistos, 10)
+    check(d["tracks"][0]["title"] == "Solo un titulo",
+          "una `busqueda` sin separador no se pierde")
+
     print("=" * 72)
     if fallos:
         print(f"{len(fallos)} FALLOS")

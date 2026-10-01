@@ -1,6 +1,7 @@
 """Curador con tool calling: Claude consulta el grafo antes de armar la playlist"""
 import json
 import logging
+import re
 from anthropic import AsyncAnthropic
 from app.config import settings
 from app.tools import TOOL_IMPL
@@ -210,26 +211,10 @@ No hagas más de 10 llamadas a herramientas, y agrupá: los álbumes van todos
 juntos en un `get_recordings`. Cada vuelta vuelve a leer la conversación entera,
 así que pedir de uno en uno es tiempo que el usuario espera mirando el teléfono.
 
-Al terminar respondé SOLO con JSON, sin markdown ni preámbulo:
-{
-  "title": "nombre corto de la playlist",
-  "concept": "la tesis en una frase",
-  "narration": "2-3 frases para leer en voz alta antes de arrancar. Español rioplatense, tono de quien sabe de música y no la hace larga.",
-  "tracks": [
-    {"recording_mbid": "...", "rationale": "una frase: por qué está y por qué en esta posición"}
-  ]
-}
-
-**Un track se identifica por su `recording_mbid` y nada más.** No repitas el
-artista, el título ni la duración: ya los tengo, me los dio la misma base que
-te los dio a vos, y escribirlos de vuelta es tiempo que el usuario espera.
-
-La única excepción es un track que NO viste en ningún `get_recordings` y que
-igual querés incluir porque sabés que existe. Ese va sin mbid y con artista y
-título, que es lo único con lo que puedo buscarlo:
-    {"artist": "...", "title": "...", "rationale": "..."}
-Usalo poco y a conciencia: YouTube siempre devuelve *algo*, así que un tema
-inventado no falla ruidosamente —suena—, y suena mal.
+Cuando tengas los tracks elegidos, entregá la playlist llamando a
+`entregar_playlist`. Es la única forma de entregarla: no la escribas como
+texto. Un track se identifica por su `recording_mbid` y nada más — artista,
+título y duración ya los tengo, me los dio la misma base que te los dio a vos.
 
 Antes de armar la lista final pasá por `get_recordings` todos los álbumes de
 los que vayas a sacar tracks, y elegí únicamente entre esos tracks. Si un álbum
@@ -247,6 +232,81 @@ SYSTEM_BLOCKS = [{
 }]
 
 # Breakpoint al final de las tools: cachea todos los schemas
+#: La entrega como HERRAMIENTA, no como texto libre. El plan de agosto ya lo
+#: decia —"salida forzada por tool schema, no por 'devolveme JSON'"— y se
+#: implemento solo en el clasificador del harness. El curador quedo pidiendo
+#: JSON en prosa y confiando en que el modelo obedezca.
+#:
+#: Medido: con el contrato escrito tres veces en el system prompt, con negrita
+#: y con el ejemplo cambiado, el modelo mando 14 de 14 tracks con artist y
+#: title igual. Una instruccion en un prompt es una sugerencia; un schema es
+#: la forma del argumento.
+#:
+#: `additionalProperties: false` no es decoracion: le dice que `artist` y
+#: `title` no son campos desaconsejados, son campos que no existen. Igual se
+#: mide despues — un schema inclina mucho mas que una instruccion, pero la
+#: API no lo rechaza, asi que la unica prueba es el log.
+ENTREGA = {
+    "name": "entregar_playlist",
+    "description": (
+        "Entregá la playlist terminada. Llamala UNA sola vez, al final, "
+        "cuando ya tengas los tracks elegidos. No devuelvas la playlist como "
+        "texto: esta herramienta es la única forma de entregarla."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string",
+                      "description": "nombre corto de la playlist"},
+            "concept": {"type": "string", "description": "la tesis en una frase"},
+            "narration": {
+                "type": "string",
+                "description": ("2-3 frases para leer en voz alta antes de "
+                                "arrancar. Español rioplatense, tono de quien "
+                                "sabe de música y no la hace larga."),
+            },
+            "tracks": {
+                "type": "array",
+                "description": "en el orden en que van a sonar",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "recording_mbid": {
+                            "type": "string",
+                            "description": (
+                                "el mbid tal como te lo dio get_recordings. "
+                                "Con esto ya tengo artista, título y duración: "
+                                "no los repitas."
+                            ),
+                        },
+                        "busqueda": {
+                            "type": "string",
+                            "description": (
+                                "SOLO para un track que no viste en ningún "
+                                "get_recordings. Formato 'Artista — Título': "
+                                "es lo único con lo que puedo buscarlo. "
+                                "Usalo poco: YouTube siempre devuelve algo, "
+                                "así que un tema inventado no falla, suena."
+                            ),
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": ("una frase corta: por qué está y "
+                                            "por qué en esta posición"),
+                        },
+                    },
+                    "required": ["rationale"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["title", "concept", "narration", "tracks"],
+        "additionalProperties": False,
+    },
+}
+
+TOOLS.append(ENTREGA)
+
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 
 def _registrar_vistos(nombre: str, args: dict, out, vistos: dict) -> None:
@@ -309,11 +369,19 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
     vistos: dict[str, dict] = {}   # recording_mbid -> lo que el modelo vio
 
     for turno in range(max_turns):
+        # En el ultimo turno la entrega se FUERZA. Antes el loop se cortaba
+        # por `max_turns` y lo que llegaba era lo que el modelo tuviera a
+        # medio hacer: "El show que nunca termino" uso 7 vueltas de 8 y 6.650
+        # tokens de salida. Forzar la herramienta convierte el techo en un
+        # cierre ordenado en vez de un corte.
+        ultimo = turno == max_turns - 1
         resp = await client.messages.create(
             model=settings.curator_model,
             max_tokens=MAX_TOKENS,
             system=SYSTEM_BLOCKS,
             tools=TOOLS,
+            tool_choice=({"type": "tool", "name": ENTREGA["name"]} if ultimo
+                         else {"type": "auto"}),
             messages=mensajes,
         )
 
@@ -334,9 +402,20 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
             data["usage"] = uso
             return data
 
+        # La entrega llega como tool_use, no como texto: es el unico camino
+        # que el prompt ofrece desde H7.1. Se busca ANTES de ejecutar
+        # herramientas porque termina el loop.
+        for block in resp.content:
+            if block.type == "tool_use" and block.name == ENTREGA["name"]:
+                logger.info("tokens — in:%(in)d out:%(out)d "
+                            "cache_r:%(cache_read)d cache_w:%(cache_write)d", uso)
+                data = _armar(dict(block.input), vistos, n_tracks)
+                data["usage"] = uso
+                return data
+
         resultados = []
         for block in resp.content:
-            if block.type != "tool_use":
+            if block.type != "tool_use" or block.name == ENTREGA["name"]:
                 continue
             fn = TOOL_IMPL.get(block.name)
             logger.info("tool %s(%s)", block.name, block.input)
@@ -362,6 +441,69 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
 
     logger.warning("no convergió — tokens: %s", uso)
     raise RuntimeError(f"el curador no convergió en {max_turns} turnos")
+
+
+def _armar(data: dict, vistos: dict | None = None,
+           n_tracks: int = 20) -> dict:
+    """Valida, enriquece desde la base y clasifica.
+
+    Lo usan los dos caminos: la herramienta `entregar_playlist`, que es como
+    el modelo entrega desde H7.1, y `_parse`, que sigue existiendo como red
+    por si entrega en prosa igual.
+    """
+    tracks = data.get("tracks")
+    if not tracks or not isinstance(tracks, list):
+        raise ValueError("el curador devolvió una playlist vacía o mal formada")
+
+    # `busqueda` ("Artista — Título") es un campo del schema de entrega y se
+    # abre aca: abajo todo el mundo espera artist y title por separado, desde
+    # la cuota de densidad hasta la busqueda en YouTube. Un campo en vez de
+    # dos no es cosmetica — es lo que hace que el schema no tenga forma de
+    # transcribir lo que la base ya sabe.
+    for t in tracks:
+        if isinstance(t, dict) and t.get("busqueda") and not t.get("title"):
+            partes = re.split(r"\s+[—–-]\s+", str(t["busqueda"]), maxsplit=1)
+            t["artist"] = partes[0].strip()
+            t["title"] = (partes[1] if len(partes) > 1 else partes[0]).strip()
+
+    # Un track es util si se puede identificar: o trae un mbid que salio de un
+    # tool result —y entonces el artista y el titulo los pone la base—, o trae
+    # artista y titulo para buscarlo en YouTube. Desde H7 el modelo manda solo
+    # el mbid, asi que este filtro TIENE que correr sabiendo que `vistos`
+    # existe: antes exigia artist y title siempre, y con la salida nueva
+    # habria descartado la playlist entera.
+    conocidos = vistos or {}
+    validos = []
+    for t in tracks:
+        if not isinstance(t, dict):
+            continue
+        mbid = str(t.get("recording_mbid") or "").strip()
+        if mbid in conocidos or (t.get("artist") and t.get("title")):
+            validos.append(t)
+    if not validos:
+        raise ValueError("ningún track se puede identificar: "
+                         "sin recording_mbid conocido y sin artist/title")
+    if len(validos) < len(tracks):
+        logger.warning("descartados %d tracks sin forma de identificarlos",
+                       len(tracks) - len(validos))
+
+    validos, metricas = _clasificar(validos, conocidos, n_tracks)
+    data["tracks"] = validos
+    data["metrics"] = metricas
+
+    # Que mando el modelo, no que guardamos nosotros. H7 le pidio mbid +
+    # rationale y el output medido casi no bajo: sin esta linea no hay forma
+    # de saber si sigue transcribiendo o si el rationale es el peso.
+    con_nombre = sum(1 for t in tracks
+                     if isinstance(t, dict) and (t.get("artist") or t.get("title")))
+    rat = [len(str(t.get("rationale") or "")) for t in tracks if isinstance(t, dict)]
+    logger.info("playlist %r: %d tracks (%d verificados, %d libres) · "
+                "salida: %d/%d con artist|title, rationale %d chars prom",
+                data.get("title"), len(validos),
+                metricas["verificados"], metricas["libres"],
+                con_nombre, len(tracks),
+                sum(rat) // max(len(rat), 1))
+    return data
 
 
 def _parse(resp, vistos: dict | None = None, n_tracks: int = 20) -> dict:
@@ -416,49 +558,7 @@ def _parse(resp, vistos: dict | None = None, n_tracks: int = 20) -> dict:
     except json.JSONDecodeError as e:
         logger.error("JSON inválido del curador:\n%s", texto[:1500])
         raise ValueError(f"el curador devolvió JSON inválido: {e}") from e
-
-    tracks = data.get("tracks")
-    if not tracks or not isinstance(tracks, list):
-        raise ValueError("el curador devolvió una playlist vacía o mal formada")
-
-    # Un track es util si se puede identificar: o trae un mbid que salio de un
-    # tool result —y entonces el artista y el titulo los pone la base—, o trae
-    # artista y titulo para buscarlo en YouTube. Desde H7 el modelo manda solo
-    # el mbid, asi que este filtro TIENE que correr sabiendo que `vistos`
-    # existe: antes exigia artist y title siempre, y con la salida nueva
-    # habria descartado la playlist entera.
-    conocidos = vistos or {}
-    validos = []
-    for t in tracks:
-        if not isinstance(t, dict):
-            continue
-        mbid = str(t.get("recording_mbid") or "").strip()
-        if mbid in conocidos or (t.get("artist") and t.get("title")):
-            validos.append(t)
-    if not validos:
-        raise ValueError("ningún track se puede identificar: "
-                         "sin recording_mbid conocido y sin artist/title")
-    if len(validos) < len(tracks):
-        logger.warning("descartados %d tracks sin forma de identificarlos",
-                       len(tracks) - len(validos))
-
-    validos, metricas = _clasificar(validos, conocidos, n_tracks)
-    data["tracks"] = validos
-    data["metrics"] = metricas
-
-    # Que mando el modelo, no que guardamos nosotros. H7 le pidio mbid +
-    # rationale y el output medido casi no bajo: sin esta linea no hay forma
-    # de saber si sigue transcribiendo o si el rationale es el peso.
-    con_nombre = sum(1 for t in tracks
-                     if isinstance(t, dict) and (t.get("artist") or t.get("title")))
-    rat = [len(str(t.get("rationale") or "")) for t in tracks if isinstance(t, dict)]
-    logger.info("playlist %r: %d tracks (%d verificados, %d libres) · "
-                "salida: %d/%d con artist|title, rationale %d chars prom",
-                data.get("title"), len(validos),
-                metricas["verificados"], metricas["libres"],
-                con_nombre, len(tracks),
-                sum(rat) // max(len(rat), 1))
-    return data
+    return _armar(data, vistos, n_tracks)
 
 
 def _clasificar(tracks: list[dict], vistos: dict,
