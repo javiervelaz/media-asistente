@@ -55,6 +55,19 @@ CASOS = [
     ("enxt",                                                "control_next",          "control_next"),
     ("proximo",                                             "control_next",          "-"),
 
+    # --- segunda tanda: los 7 que pagaron Haiku del 18/09 al 01/10 -------
+    # Mismo criterio que arriba: salieron de turn_log, no de mi cabeza.
+    ("Que tenemos de los anios 80 en el estante?",           "coleccion_consulta",     "coleccion_por_atributo"),
+    ("Lista discos de los anios 80",                         "coleccion_consulta",     "coleccion_por_atributo"),
+    # Un RANGO, no una decada: "entre el 80 y el 89" no es "los 80".
+    ("Que discos entre el 80 y el 89 tenemos en la coleccion?", "coleccion_consulta",  "coleccion_por_atributo"),
+    ("Que podemos escuchar hoy que no hayamos escuchado en el estante?",
+                                                             "nunca_escuchado",        "nunca_escuchado"),
+    # "eh" por "he": el tipeo mas comun del castellano.
+    ("Que no eh escuchado de mi coleccion?",                 "nunca_escuchado",        "coleccion_consulta"),
+    # Dos caracteres. Tres guardas distintas lo bloqueaban.
+    ("Pone u2",                                              "playlist",               "playlist"),
+
     # --- estos SI tienen que seguir yendo al clasificador ---------------
     # No son consultas sobre el estante: son pedidos curatoriales.
     ("quiero descubrir mas jazz",                           None, "set_objetivo_descubrimiento"),

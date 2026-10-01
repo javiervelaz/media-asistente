@@ -37,9 +37,17 @@ async def _rutear(text: str) -> tuple[Intent, dict]:
     # turn_log y pagaban clasificacion. Preguntarle a la base si ese texto
     # es un artista cuesta una query y cero tokens — y es mas confiable que
     # el modelo para nombres con typos, porque el trigram los tolera.
+    # `stage='artista'` tenia CERO turnos en todo el turn_log, en un mes.
+    # El motivo: se le preguntaba a la base por `text`, con el verbo
+    # adentro. "Pone u2" hacia trigram contra `artists.name` como
+    # "pone u2", que no se parece a nada, y la etapa caia siempre.
+    # El arreglo de `sin_verbo` de agosto se aplico al slot que se manda al
+    # curador y no a la consulta que decide — el mismo bug, dos lineas mas
+    # arriba, sobreviviendo un mes porque fallaba en silencio.
+    pedido = sin_verbo(text)
     try:
-        if await local_search.es_monografico(text):
-            return Intent(name="playlist", slots={"prompt": sin_verbo(text)},
+        if await local_search.es_monografico(pedido):
+            return Intent(name="playlist", slots={"prompt": pedido},
                           confidence=1.0, stage=ARTISTA), {}
     except Exception:
         logger.exception("no pude chequear si el texto es un artista")
@@ -123,6 +131,7 @@ def _uso(res: Result) -> dict:
     return {
         "input_tokens": int(u.get("in") or 0),
         "cached_tokens": int(u.get("cache_read") or 0),
+        "cache_write_tokens": int(u.get("cache_write") or 0),
         "output_tokens": int(u.get("out") or 0),
     }
 
@@ -148,6 +157,7 @@ async def responder(text: str, session_id: str, room_id: str = "main") -> dict:
     uso["input_tokens"] += int(uso_router.get("in") or 0)
     uso["output_tokens"] += int(uso_router.get("out") or 0)
     uso["cached_tokens"] += int(uso_router.get("cache_read") or 0)
+    uso["cache_write_tokens"] += int(uso_router.get("cache_write") or 0)
     # `gasto` lo marca el ejecutor de playlist. No alcanza con el nombre del
     # intent (por una confirmacion el ruteado es `confirmar`) ni con los
     # tokens (la via local devuelve 0 y sigue siendo una playlist).

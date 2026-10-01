@@ -341,6 +341,69 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"\s+(?:en|un|de)\s+(?:mi|mis|la|el|los)\s+" + _ESTANTE + r"?"
         r"(?:\s+para\s+" + _ESCUCHAR + r")?$")),
 
+    # --- segunda tanda, del turn_log del 18/09 al 01/10 -------------------
+    #
+    # Seis de los siete turnos que pagaron Haiku en dos semanas siguen
+    # siendo la coleccion, en formas que la primera tanda no cubria.
+
+    # "Que tenemos de los anios 80 en el estante?" — la version de abajo
+    # exigia fin de linea despues del valor, asi que el marcador de estante
+    # al final la rompia. Es el mismo patron con una cola opcional.
+    #
+    # Va a `coleccion_consulta` y NO a `coleccion_por_atributo`: sin un
+    # sustantivo que desambigue, "de X" puede ser un genero o un artista.
+    # Lo apunte al atributo y el test canto que "que tenemos de jazz?"
+    # cambiaba de intent — con "de Queen?" habria contestado "no tengo nada
+    # de Queen en el estante", que es falso. La regla de H6 sigue en pie:
+    # solo va derecho al atributo lo que dice "artistas"/"bandas".
+    ("coleccion_consulta", re.compile(
+        r"^(?:que|cuanto|cuantos|cuantas)\s+(?:tenemos|ten[gt]o|hay|queda)\s+"
+        r"(?:de|del)\s+"
+        r"(?:los\s+|las\s+)?(?:anios?\s+)?"
+        r"(?P<valor>(?!(?:mi|mis|la|el|los|las)\b)[\w\s'.&-]{2,30}?)"
+        r"(?:\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+" + _ESTANTE + r")?$")),
+
+    # "Lista discos de los anios 80" — imperativo de listar, sin marcador.
+    # Va a `coleccion_consulta` porque el sustantivo es "discos": puede ser
+    # un artista o un atributo, y eso lo resuelve el ejecutor contra la base.
+    ("coleccion_consulta", re.compile(
+        r"^(?:lista(?:me|r)?|mostrame|dame|deci(?:me)?|ver)\s+"
+        r"(?:discos?|albumes?|temas?|canciones?|vinilos?|"
+        + _N_ARTISTA + r")\s+"
+        r"(?:de|del)\s+"
+        r"(?:los\s+|las\s+)?(?:anios?\s+)?"
+        r"(?P<valor>(?!(?:mi|mis|la|el|los|las)\b)[\w\s'.&-]{2,30}?)"
+        r"(?:\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+" + _ESTANTE + r")?$")),
+
+    # "Que discos entre el 80 y el 89 tenemos en la coleccion?" — un RANGO.
+    # No es una decada: "entre el 80 y el 89" puede ser cualquier par de
+    # anios. El valor se captura entero y lo parsea `clasificar_atributo`.
+    ("coleccion_consulta", re.compile(
+        r"^(?:que|cuales|cuantos|cuantas)\s+"
+        r"(?:discos?|albumes?|temas?|canciones?|vinilos?|"
+        + _N_ARTISTA + r")\s+"
+        r"(?P<valor>entre\s+(?:el\s+)?\d{2,4}\s+y\s+(?:el\s+)?\d{2,4})"
+        r"(?:\s+(?:ten[gt]o|hay|tenemos|tenes))?"
+        r"(?:\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+" + _ESTANTE + r")?$")),
+
+    # "Que podemos escuchar hoy que no hayamos escuchado en el estante?"
+    # La forma larga y conversada. Lo que la identifica es la negacion del
+    # mismo verbo: "escuchar ... que no ... escuchado".
+    ("nunca_escuchado", re.compile(
+        r"^que\s+(?:podemos|puedo|podria|hay\s+para)\s+" + _ESCUCHAR + r"\s*"
+        r"(?:hoy|ahora|esta\s+noche)?\s+"
+        r"que\s+(?:no|nunca)\s+(?:hayamos?|haya|he|eh|hemos)?\s*"
+        r"escuchad[oa]"
+        r"(?:\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+" + _ESTANTE + r")?$")),
+
+    # "Que no eh escuchado de mi coleccion?" — `eh` por `he`. No es una
+    # concesion: es el tipeo mas comun del castellano y aparecio en el log.
+    ("nunca_escuchado", re.compile(
+        r"^que\s+(?:no|nunca)\s+(?:eh|he|hay[ae]|hemos|hayamos)?\s*"
+        r"escuchad[oa]"
+        r"(?:\s+(?:aun|todavia|nunca))?"
+        r"(?:\s+(?:en|de)\s+(?:mi|mis|la|el|los)\s+" + _ESTANTE + r")?$")),
+
     # "que tenemos de jazz?" — sin sustantivo y sin marcador de estante.
     # "tenemos" ya implica posesion: se pregunta por lo que hay, no por lo
     # que existe en el mundo.
@@ -519,7 +582,11 @@ PATRONES: list[tuple[str, re.Pattern]] = [
         r"^(?:pone(?:r|me|le|lo|la)?|arma(?:me)?|tira(?:me)?|dame|"
         r"sona(?:me)?|reproduci(?:r|me)?|reproduce|busca(?:r|me)?|"
         r"quiero escuchar|quiero oir|tengo ganas de|escuchar|algo de)"
-        r"\s+(?P<libre>.{3,})$")),
+        # `.{2,}` y no `.{3,}`: con tres, "pone u2" no matcheaba y se iba al
+        # clasificador por 3.469 tokens. Pago dos veces en turn_log por un
+        # minimo que nadie eligio a proposito. U2, R.E.M. y XTC estan en el
+        # estante; los nombres cortos son normales, no un caso borde.
+        r"\s+(?P<libre>.{2,})$")),
 
     # --- todavia sin ejecutor (H2/H4): se dejan comentados a proposito.
     # Un patron que matchea un intent sin ejecutor es peor que no matchear:

@@ -124,16 +124,23 @@ async def es_monografico(prompt: str) -> bool:
     por el grafo o no, que es la diferencia entre curar una escena y
     responder lo que se pidió.
     """
-    if not prompt or len(prompt.strip()) < 3:
+    p = (prompt or "").strip()
+    if len(p) < 2:
         return False
     try:
         row = await fetchrow(
             "SELECT similarity(name, $1) AS sim FROM artists "
-            "WHERE name % $1 ORDER BY sim DESC LIMIT 1", prompt.strip())
+            "WHERE name % $1 ORDER BY sim DESC LIMIT 1", p)
     except Exception:
         logger.exception("no pude decidir si el pedido es monográfico")
         return False
-    return bool(row and (row["sim"] or 0) >= MONOGRAFICO_SIM)
+    # Con dos o tres caracteres el trigram tiene muy poco con que trabajar,
+    # asi que se exige coincidencia casi exacta en vez de bajar el umbral
+    # para todos. "u2" entra porque es U2; "aa" no entra por parecido.
+    # El minimo era 3 y dejaba afuera a U2 — uno de los artistas que mas
+    # escuchas, inalcanzable por todos los caminos gratis del harness.
+    umbral = 0.9 if len(p) <= 3 else MONOGRAFICO_SIM
+    return bool(row and (row["sim"] or 0) >= umbral)
 
 
 async def buscar(prompt: str, limite: int = 20,

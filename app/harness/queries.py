@@ -726,6 +726,18 @@ PAISES = {
 _DECADA = re.compile(r"^(?:los\s+|la\s+decada\s+de\s+(?:los\s+)?)?"
                      r"(?:anios?\s+)?(?P<n>\d{2,4})s?$")
 
+#: "entre el 80 y el 89". Salio del turn_log y no es una decada: los dos
+#: extremos son libres, asi que no se puede derivar de un solo numero.
+_RANGO = re.compile(r"^entre\s+(?:el\s+)?(?P<a>\d{2,4})\s+y\s+"
+                    r"(?:el\s+)?(?P<b>\d{2,4})$")
+
+
+def _anio(n: int) -> int:
+    """80 -> 1980, 05 -> 2005, 1980 -> 1980."""
+    if n >= 100:
+        return n
+    return n + (1900 if n >= 30 else 2000)
+
 
 def clasificar_atributo(valor: str) -> tuple[str, object] | None:
     """Que dimension es `valor`: decada, pais o genero. Sin LLM.
@@ -740,12 +752,16 @@ def clasificar_atributo(valor: str) -> tuple[str, object] | None:
     if not v:
         return None
 
+    m = _RANGO.match(v)
+    if m:
+        a, b = _anio(int(m.group("a"))), _anio(int(m.group("b")))
+        return ("decada", (min(a, b), max(a, b)))
+
     m = _DECADA.match(v)
     if m:
-        n = int(m.group("n"))
-        if n < 100:                      # "los 80" / "los 90"
-            n += 1900 if n >= 30 else 2000
-        return ("decada", n - n % 10)
+        n = _anio(int(m.group("n")))
+        desde = n - n % 10
+        return ("decada", (desde, desde + 9))
 
     if v in PAISES:
         return ("pais", PAISES[v])
@@ -796,10 +812,10 @@ SQL_ATTR = {
         JOIN artists  a ON a.mbid = r.artist_mbid
         WHERE e.weight = 1
           AND left(e.release_date, 4) ~ '^[0-9]{4}$'
-          AND left(e.release_date, 4)::int BETWEEN $1::int AND $1::int + 9
+          AND left(e.release_date, 4)::int BETWEEN $1::int AND $2::int
         GROUP BY a.name
         ORDER BY discos DESC, a.name
-        LIMIT $2::int
+        LIMIT $3::int
     """,
 }
 
@@ -810,7 +826,9 @@ async def coleccion_por_atributo(dimension: str, valor,
     sql = SQL_ATTR.get(dimension)
     if sql is None:
         return []
-    rows = await fetch(sql, valor, limite)
+    # `decada` llega como (desde, hasta) y las otras como un solo valor.
+    args = list(valor) if isinstance(valor, tuple) else [valor]
+    rows = await fetch(sql, *args, limite)
     return [dict(r) for r in rows]
 
 
@@ -827,16 +845,19 @@ _SQL_MBIDS_BASE = """
     JOIN artists  a ON a.mbid = r.artist_mbid
     WHERE e.weight = 1 AND {filtro}
     ORDER BY random()
-    LIMIT $2::int
+    LIMIT {lim}
 """
 
 SQL_MBIDS_ATTR = {
-    "genero": _SQL_MBIDS_BASE.format(filtro="a.tags @> ARRAY[$1::text]"),
-    "pais":   _SQL_MBIDS_BASE.format(filtro="a.country = $1::text"),
+    "genero": _SQL_MBIDS_BASE.format(filtro="a.tags @> ARRAY[$1::text]",
+                                     lim="$2::int"),
+    "pais":   _SQL_MBIDS_BASE.format(filtro="a.country = $1::text",
+                                     lim="$2::int"),
     "decada": _SQL_MBIDS_BASE.format(
         filtro="left(e.release_date, 4) ~ '^[0-9]{4}$' "
                "AND left(e.release_date, 4)::int "
-               "BETWEEN $1::int AND $1::int + 9"),
+               "BETWEEN $1::int AND $2::int",
+        lim="$3::int"),
 }
 
 
@@ -851,7 +872,8 @@ async def releases_por_atributo(dimension: str, valor,
     sql = SQL_MBIDS_ATTR.get(dimension)
     if sql is None:
         return []
-    rows = await fetch(sql, valor, limite)
+    args = list(valor) if isinstance(valor, tuple) else [valor]
+    rows = await fetch(sql, *args, limite)
     return [r["mbid"] for r in rows if r.get("mbid")]
 
 
