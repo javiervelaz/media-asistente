@@ -20,6 +20,11 @@ from pathlib import Path
 
 HORA = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d):(\d\d):(\d\d),(\d{3})")
 TOOL = re.compile(r"app\.curator: tool (\w+)")
+#: Cuenta mbids en los argumentos de un tool call. Es la columna que decide si
+#: el batch de H7 se esta usando de verdad: con `release_mbids: [a,b,c]` el
+#: modelo agrupa, con una lista de uno sigue preguntando de a un album y H7
+#: no sirvio, aunque el codigo nuevo este desplegado.
+MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 API = re.compile(r"api\.anthropic\.com/v1/messages")
 TOKENS = re.compile(r"app\.curator: tokens — in:(\d+) out:(\d+) "
                     r"cache_r:(\d+) cache_w:(\d+)")
@@ -38,10 +43,18 @@ def segundos(linea: str) -> float | None:
     return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms) / 1000
 
 
+def fecha(linea: str) -> str | None:
+    m = HORA.match(linea)
+    return m.group(1) if m else None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default="~/logs/media-api.log")
     ap.add_argument("-n", type=int, default=20, help="ultimas N playlists")
+    ap.add_argument("--desde", help="solo desde esta fecha, YYYY-MM-DD. "
+                                    "Comparar 'antes' con 'despues' tiene que "
+                                    "ser dos comandos, no dos interpretaciones.")
     args = ap.parse_args()
 
     ruta = Path(args.log).expanduser()
@@ -59,13 +72,15 @@ def main() -> int:
 
         if m := TOOL.search(linea):
             if actual is None:
-                actual = {"tools": [], "api": [], "t0": t}
+                actual = {"tools": [], "api": [], "t0": t, "lotes": []}
             actual["tools"].append(m.group(1))
+            if m.group(1) == "get_recordings":
+                actual.setdefault("lotes", []).append(len(MBID.findall(linea)))
             continue
 
         if API.search(linea):
             if actual is None:
-                actual = {"tools": [], "api": [], "t0": t}
+                actual = {"tools": [], "api": [], "t0": t, "lotes": []}
             actual["api"].append(t)
             continue
 
@@ -80,7 +95,8 @@ def main() -> int:
                 continue
             actual.update(titulo=m.group("t"), tracks=int(m.group("n")),
                           verificados=int(m.group("v")),
-                          libres=int(m.group("l")), t1=t)
+                          libres=int(m.group("l")), t1=t,
+                          dia=fecha(linea) or "?")
             playlists.append(actual)
             actual = None
 
@@ -90,11 +106,16 @@ def main() -> int:
         print("no hay playlists del curador en el log")
         return 1
 
+    if args.desde:
+        curadas = [p for p in curadas if p.get("dia", "") >= args.desde]
+        if not curadas:
+            print(f"no hay playlists del curador desde {args.desde}")
+            return 1
     muestra = curadas[-args.n:]
     print(f"{len(curadas)} playlists del curador en el log · últimas {len(muestra)}")
     print("=" * 94)
-    print(f"{'playlist':28} {'tk':>3} {'tools':>5} {'API':>4} "
-          f"{'out':>6} {'cache_r':>8} {'cache_w':>8} {'seg':>6} {'USD':>7}")
+    print(f"{'fecha':10} {'playlist':24} {'tk':>3} {'tools':>5} {'API':>4} "
+          f"{'alb/ll':>6} {'out':>6} {'cache_w':>8} {'seg':>6} {'USD':>7}")
     print("-" * 94)
 
     tot = {"tools": 0, "api": 0, "out": 0, "cache_r": 0, "cache_w": 0,
@@ -107,9 +128,12 @@ def main() -> int:
         api = [a for a in p["api"] if a is not None]
         gaps = [b - a for a, b in zip(api, api[1:]) if 0 < b - a < 600]
         seg = sum(gaps) + (p["t1"] - api[-1] if api and p.get("t1") else 0)
-        print(f"{p['titulo'][:28]:28} {p['tracks']:3} {len(p['tools']):5} "
-              f"{len(api):4} {p['out']:6} {p['cache_r']:8} {p['cache_w']:8} "
-              f"{seg:6.1f} {usd:7.4f}")
+        lotes = p.get("lotes") or []
+        # Promedio de albumes por llamada a get_recordings. "—" = no la uso.
+        alb = f"{sum(lotes)/len(lotes):.1f}" if lotes else "—"
+        print(f"{p.get('dia','?'):10} {p['titulo'][:24]:24} {p['tracks']:3} "
+              f"{len(p['tools']):5} {len(api):4} {alb:>6} {p['out']:6} "
+              f"{p['cache_w']:8} {seg:6.1f} {usd:7.4f}")
         for k, v in (("tools", len(p["tools"])), ("api", len(api)),
                      ("out", p["out"]), ("cache_r", p["cache_r"]),
                      ("cache_w", p["cache_w"]), ("usd", usd), ("seg", seg)):
@@ -117,16 +141,27 @@ def main() -> int:
 
     n = len(muestra)
     print("-" * 94)
-    print(f"{'PROMEDIO':28} {'':3} {tot['tools']/n:5.1f} {tot['api']/n:4.1f} "
-          f"{tot['out']/n:6.0f} {tot['cache_r']/n:8.0f} {tot['cache_w']/n:8.0f} "
-          f"{tot['seg']/n:6.1f} {tot['usd']/n:7.4f}")
+    lotes = [x for p in muestra for x in (p.get("lotes") or [])]
+    alb = f"{sum(lotes)/len(lotes):.1f}" if lotes else "—"
+    print(f"{'PROMEDIO':10} {'':24} {'':3} {tot['tools']/n:5.1f} "
+          f"{tot['api']/n:4.1f} {alb:>6} {tot['out']/n:6.0f} "
+          f"{tot['cache_w']/n:8.0f} {tot['seg']/n:6.1f} {tot['usd']/n:7.4f}")
 
     cw = tot["cache_w"] * P_CACHE_W / 1_000_000
     print(f"\nla escritura de caché es el {100*cw/tot['usd']:.0f}% del gasto")
     print(f"herramientas por vuelta a la API: {tot['tools']/max(tot['api'],1):.1f}")
-    print("\nH7 busca bajar `tools`, `API` y `out`. Los tres se multiplican:")
-    print("menos vueltas es contexto más chico, y contexto más chico acelera")
-    print("todas las llamadas y baja la escritura de caché.")
+    print(f"herramientas por vuelta a la API: {tot['tools']/max(tot['api'],1):.1f}")
+    print()
+    if alb == "—":
+        print("alb/ll en '—': no hay mbids en los argumentos de get_recordings.")
+        print("El log es de antes de H7, o la Pi corre el código viejo.")
+    elif float(alb) < 1.5:
+        print(f"alb/ll = {alb}: el código nuevo está vivo pero el modelo sigue")
+        print("pidiendo los álbumes DE UNO. El batch existe y no se usa — eso")
+        print("no se arregla con una descripción más insistente, se arregla")
+        print("quitándole la opción o devolviéndole los tracks antes.")
+    else:
+        print(f"alb/ll = {alb}: el modelo está agrupando. H7 funcionando.")
     return 0
 
 
