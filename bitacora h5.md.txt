@@ -1,0 +1,379 @@
+# Bitácora — H5: el bot escribe primero
+ 
+**Fecha:** 2026-09-18 · rama `h5` · de `99c2908` a `397dc80`
+Implementa `plan-proactividad-h5.md`. Continúa `bitacora-eof-y-datos.md`.
+ 
+Un mensaje por día, a la hora que elegís, armado con SQL que ya existía. Cero
+tokens. Ofrece y espera un botón; nunca reproduce solo.
+ 
+El bloque funciona de punta a punta. Lo interesante no es eso: son los **seis
+bugs que aparecieron entre "el código está listo" y "el círculo cerró"**, que
+son todos la misma familia y ninguno lo agarró un test.
+ 
+---
+ 
+## Lo que quedó andando
+ 
+```
+20:00  el cron pregunta        POST /sugerencia
+       la API elige y registra fila en `sugerencias`, devuelve texto + botones
+       Telegram                mensaje con [Ponelo] [No ahora]
+       el botón                callback "sug:17:si" -> POST /sugerencia/respuesta
+       la API encola           tracks_de_releases(mbids) -> mpv
+       el eof                  completed = true, played_ms real
+```
+ 
+Tres fuentes por prioridad y **una** gana: efeméride de un disco del estante
+(`weight = 1`) → objetivo más atrasado con muestra suficiente → disco del
+estante sin escuchar hace 90 días. Si ninguna califica, no se manda nada.
+ 
+### La decisión que ordenó el bloque
+ 
+**La oferta no puede vivir en `SessionState`.** Ese mecanismo tiene TTL de 5
+minutos y se pierde entero en un restart; el push sale a las 20:00 y la
+respuesta llega a las 20:40, o a la noche, o después de un `systemctl
+restart`. Es la misma clase de bug que `_current` perdiéndose en el reinicio.
+ 
+Vive en la tabla `sugerencias`, y el botón lleva solo una referencia corta
+porque **`callback_data` son 64 bytes de Telegram y un mbid son 36
+caracteres**: no entran ni dos.
+ 
+```
+callback_data = "sug:17:si"      (9 bytes)
+```
+ 
+Esa misma fila da gratis las otras dos cosas que el bloque necesitaba: la
+memoria de lo ya sugerido —sin ella el mismo disco llega siete días
+seguidos— y **la tasa de aceptación**, que es la única medida honesta de si
+la proactividad sirve o es ruido.
+ 
+`mbids` guarda lo que se **ofreció**, no cómo se eligió. Misma lección del
+H2.1: si la fila guardara el criterio y la playlist se recalculara al aceptar,
+podrías recibir algo distinto de lo que viste.
+ 
+---
+ 
+## Los seis bugs
+ 
+Todos aparecieron **usando el sistema**, ninguno en los tests. Y los seis son
+el mismo patrón, que conviene nombrar antes de contarlos:
+ 
+> **Un desajuste de tipo o de forma en un borde, que la capa de arriba acepta
+> sin chistar.** Entre asyncpg y Postgres, entre el `.env` y pydantic, entre
+> la zona horaria del usuario y la de la base, entre lo que el código cree
+> medir y lo que el usuario hace.
+ 
+### 1 · `CURRENT_DATE` es el día de la sesión de Postgres, no el tuyo
+ 
+```sql
+SELECT current_setting('TimeZone');  -- GMT
+SELECT current_date;                 -- 2026-09-17
+SELECT (now() AT TIME ZONE 'America/Argentina/Cordoba')::date;  -- 2026-09-16
+```
+ 
+`efemerides_hoy` filtraba por `to_char(CURRENT_DATE, 'MM-DD')`. Entre las
+21:00 de Córdoba y la medianoche eso ya es el día siguiente: la consulta
+devolvía **las efemérides de mañana**. Sin fallar y sin avisar.
+ 
+Salió mirando un preview real: contestaba con el estante teniendo tres
+efemérides de la colección ese día, Nina Simone cumpliendo 60 entre ellas. La
+prioridad estaba bien; la entrada estaba mal.
+ 
+Es exactamente el bug que la bitácora del H2 documentó para *"qué escuché
+hoy"* —se arregló del lado de Python y quedó abierto del lado del SQL—, y
+recién importó ahora porque la efeméride es la fuente de **mayor prioridad**
+de H5: con `harness_sugerencia_hora` en 21 o más, la fuente principal quedaba
+muda todos los días.
+ 
+**Regla que queda:** toda decisión de "qué día es hoy" se toma en
+`harness_tz`, esté en Python o en SQL. Para eso existe `queries.TZ_NOMBRE`.
+ 
+### 2 · La config de un bloque apagado tumbó el reproductor
+ 
+```
+harness_sugerencia_hora
+  Input should be a valid integer, unable to parse string as an integer
+  input_value='10:30'
+```
+ 
+Un typo razonable en un campo que se llama "hora". Pydantic valida al
+importar, `app.config` no importa, uvicorn muere, systemd reintenta:
+ 
+```
+media-api.service: Scheduled restart job, restart counter is at 33.
+```
+ 
+Treinta y tres reinicios. El reproductor caído, Cloudflare devolviendo 502, y
+todo por la config de un bloque que estaba **apagado**.
+ 
+**Regla que queda, ahora escrita en `config.py`:** un campo **obligatorio**
+(`database_url`, las API keys) tiene que fallar fuerte, porque sin él nada
+anda. Un campo **opcional con default** cae al default y avisa. Es lo que ya
+hacían `goals.progreso` (*"un objetivo roto no puede tumbar un turno"*) y
+`telemetry` (fire-and-forget), subido un nivel: de "no tumbar un turno" a "no
+tumbar el servicio".
+ 
+Los cinco campos de H5 tienen validadores tolerantes. `20:30` usa la hora y
+descarta los minutos; `20%` se lee como `0.2`; cualquier basura cae al default
+con un `logger.error`.
+ 
+> Nota al pie, por honestidad: el dict de defaults lo puse primero **dentro**
+> de la clase. Pydantic lo trata como `ModelPrivateAttr`, el validador recibió
+> el wrapper, y **el validador escrito para que la config no rompa el import
+> rompió el import**. Va a nivel de módulo.
+ 
+### 3 · El cron despertaba Neon 24 veces al día para no hacer nada
+ 
+El cron corre cada hora y **23 de las 24 corridas diarias terminan en "no es
+la hora"**. La consulta de silencio estaba antes de esa comprobación, así que
+cada una de esas 23 abría conexión y despertaba el compute de Neon —que
+suspende solo— sin hacer nada con él.
+ 
+`min_size=0` y `max_inactive_connection_lifetime=30` están puestos justamente
+para que Neon pueda suspender. Un ping horario los anulaba.
+ 
+**Regla que queda:** las guardas baratas van primero. El orden es
+apagado → hora → mpv → base. No es prolijidad, es la diferencia entre pagar y
+no pagar.
+ 
+### 4 · La guarda que iba a silenciar el bloque para siempre
+ 
+La más grave de las seis, porque **no parecía un bug**.
+ 
+```
+20:00:54 sin sugerencia para telegram: ya hubo una escucha completa hoy
+```
+ 
+Correcto según el código. Y contra los datos reales:
+ 
+```
+día     completas   primera   última
+09-17      40       11:44     14:58
+09-16      18       13:15     14:40
+09-15      53       13:15     23:17
+09-14      42       11:12     22:10
+09-13      28       14:38     16:27
+09-12      16       21:41     22:54
+```
+ 
+**Seis de seis días con escuchas completas.** H5 no iba a mandar un solo
+mensaje, nunca, y el log lo explicaba como comportamiento esperado. Un bloque
+perfectamente instrumentado que no sirve para nada: el peor resultado
+posible, porque ni siquiera parece roto.
+ 
+La intención nunca fue *"ya tuviste tu música hoy"*, era *"no me interrumpas
+si estoy escuchando"*. Son dos preguntas y ninguna se mide en días:
+ 
+- **¿Suena ahora?** Se consulta el socket de mpv, no la base. **Falla
+  abierto**: si no se puede consultar, se manda. Darle a una guarda el poder
+  de apagar el bloque cuando no puede verificar es el bug que se está
+  arreglando.
+- **¿Escuchaste hace poco?** `harness_sugerencia_gracia_horas`, default 3.
+**Regla que queda:** antes de escribir una regla sobre el comportamiento del
+usuario, mirá los datos del usuario. La consulta que lo habría evitado son
+cinco líneas y existía desde el principio.
+ 
+### 5 · Un parámetro sin cast que falla al PREPARAR
+ 
+```
+asyncpg.exceptions.UndefinedFunctionError:
+  operator does not exist: timestamp with time zone > interval
+```
+ 
+```sql
+AND started_at > $1 - make_interval(hours => $2)
+```
+ 
+Postgres infiere el tipo de cada parámetro por contexto: ve `$1 - interval`,
+deduce que `$1` es un `interval`, y la comparación queda `timestamptz >
+interval`, que no existe. Con `$1::timestamptz` y `$2::int` resuelve.
+ 
+Lo importante es **dónde** falla: al preparar el statement, no al ejecutarlo.
+No depende de los datos, ningún fixture lo evita, y no aparece hasta que el
+código corre contra Postgres de verdad. Las otras cinco consultas del bloque
+usan `now() - make_interval(...)`, con el lado izquierdo ya tipado, y por eso
+ninguna fallaba.
+ 
+Verificado con el mismo mecanismo que usa asyncpg:
+ 
+```sql
+PREPARE t AS ... $1 - make_interval(hours => $2)                  -- ERROR
+PREPARE t AS ... $1::timestamptz - make_interval(hours => $2::int) -- ok
+```
+ 
+`verificar_sugerencias` arranca ahora haciendo `PREPARE` de las siete
+consultas del módulo. No toca una fila, tarda nada, y cubre la clase entera.
+ 
+### 6 · El verificador probaba otra cosa que la que corría
+ 
+Dos fallas en el propio script, y las dos valen más que los bugs que debía
+atrapar.
+ 
+**La SQL estaba duplicada.** Arreglé el cast en `sugerencias.py` y la copia
+del script siguió rota. Peor: el bloque de `PREPARE` validaba la versión buena
+mientras el test de abajo ejecutaba la mala. **Un verificador que prueba algo
+distinto de lo que corre en producción es peor que no tenerlo**, porque da
+confianza falsa. La duplicación era el bug; el cast faltante era el síntoma.
+Ahora la consulta vive una sola vez, en `sugerencias.SQL_ESCUCHA_RECIENTE`.
+ 
+**Y dos tests fallaban según si había música sonando.** La guarda de mpv corre
+antes que las de la base, así que cualquier test de una guarda de base falla
+si el dueño de la Pi está escuchando algo. mpv es una condición **externa** al
+script: un verificador cuyo resultado depende de eso no verifica nada.
+`_suena_ahora` se neutraliza para esos casos y se prueba aparte.
+ 
+---
+ 
+## El despliegue, que fue su propia odisea
+ 
+Ninguno de estos es un bug del bloque, pero juntos son la mitad del tiempo:
+ 
+| Síntoma | Causa |
+|---|---|
+| `jq: parse error` | Cloudflare Access devolviendo 403 HTML — al curl le faltaban los headers del service token |
+| `Bad Request: chat_id is empty` | `$env.TELEGRAM_CHAT_ID` no existía en n8n; el `chat_id` estaba en `turn_log` desde el 31/08 (`session_id = 'tg:<id>'`) |
+| llegó un mensaje que decía `null` | el script de prueba asumía `$MEDIA_API_KEY` seteada; la API devolvió 422 y `jq` sacó `.texto` del error |
+| `API_KEY` vs `api_key` | pydantic no distingue mayúsculas, `grep` sí |
+| `GET / 404` desde el VPS | `Map Command to API` sin la rama `sug:`: sin `path` ni `method`, la URL quedaba en la raíz |
+| 502 de Cloudflare | transitorio durante un reinicio |
+ 
+De ese último saqué la peor lección de método de la sesión: **teoricé sobre el
+Router sin mirar los timestamps.** Dije que los callbacks no estaban ruteando
+cuando el botón ya había funcionado media hora antes; los `GET / 404` eran de
+*antes* del parche. El log tenía la respuesta y yo estaba inventando una causa
+que ya no existía.
+ 
+---
+ 
+## La prueba del eof, en el log
+ 
+Vale repetirla acá porque cerró un hilo de meses:
+ 
+```
+11:47:18  primer end-file crudo: {'event': 'end-file', 'reason': 'eof', 'playlist_entry_id': 1}
+11:47:20  completo: Dead Kennedys - Kill the Poor (185281 ms)
+```
+ 
+Tres claves en el evento. `playlist_entry_path` no existe. Esa línea se dejó
+en el código a propósito para poder confirmarlo contra el mpv real, y dos
+segundos más abajo está el arreglo funcionando: evento sin path, atribuido
+igual, señal registrada con la duración medida.
+ 
+---
+ 
+## Y los logs, que costaron cuatro veces
+ 
+```
+Sep 17 media-api.service: restart counter is at 33.
+$ journalctl --user -u media-api
+No journal files were found.
+-- No entries --
+```
+ 
+Treinta y tres reinicios invisibles. El servicio gritaba la respuesta exacta y
+no había dónde leerla.
+ 
+La comparación es el mejor argumento que este proyecto va a producir a favor
+de la observabilidad:
+ 
+- **Antes:** media hora adivinando, un 502 que no explicaba nada, y el bug
+  encontrado corriendo el import a mano.
+- **Después:** `sin sugerencia para telegram: no es la hora (son las 11, manda
+  a las 10)`. Una línea, cero adivinanza.
+Se resolvió sin journald, con un append a archivo en el override del service:
+ 
+```ini
+[Service]
+StandardOutput=append:/home/javier/logs/media-api.log
+StandardError=append:/home/javier/logs/media-api.log
+```
+ 
+Era el pendiente más viejo del proyecto. Ya cerró.
+ 
+---
+ 
+## Config
+ 
+```
+harness_sugerencia_activa        False   # se prende a mano
+harness_sugerencia_hora          20      # local, harness_tz
+harness_sugerencia_dias_repetir  60
+harness_sugerencia_estante_dias  90
+harness_sugerencia_gracia_horas  3
+harness_sugerencia_min_aceptacion 0.2
+harness_sugerencia_min_envios    10
+```
+ 
+Los siete toleran basura y caen al default con un warning.
+ 
+---
+ 
+## Qué falta medir
+ 
+**La semana de prueba, con dos criterios duros:**
+ 
+```sql
+-- 1. como maximo siete mensajes, ninguno repetido
+SELECT enviada_at::date, count(*), string_agg(kind, ', ')
+FROM sugerencias GROUP BY 1 ORDER BY 1;
+ 
+-- 2. a los diez dias, la unica pregunta que importa
+SELECT kind, count(*) enviadas,
+       count(*) FILTER (WHERE aceptada)         aceptadas,
+       count(*) FILTER (WHERE aceptada IS NULL) ignoradas
+FROM sugerencias GROUP BY 1;
+```
+ 
+Si salen catorce mensajes, alguna guarda no está haciendo su trabajo.
+ 
+Y si `ignoradas` domina en los tres tipos: **el problema no es el criterio ni
+la redacción, es que no querés que el bot te escriba, y lo correcto es apagar
+H5.** Queda escrito acá y en el plan para que ninguno de los dos lo
+racionalice cuando llegue el momento.
+ 
+---
+ 
+## Pendiente
+ 
+- [ ] **Rotar las cuatro credenciales.** Abierto desde el 31/08 y ahora peor:
+      durante esta sesión quedaron expuestos el token del bot, la API key y el
+      `DATABASE_URL` completo de Neon —usuario y password— en capturas y
+      salidas de consola. El de Neon es el más serio: da lectura y escritura
+      sobre un año de hidratación del grafo.
+- [ ] Sacar `ignorar_hora` del nodo "Pedir sugerencia" de n8n. Es el último
+      andamiaje de prueba, y si queda el bot escribe 24 veces al día.
+- [ ] Cargar `TELEGRAM_CHAT_ID` como variable en vez del número hardcodeado.
+- [ ] `parse_mode: Markdown` en el nodo de Telegram con títulos que vienen de
+      MusicBrainz: un `_` o un `*` suelto da `400 can't parse entities` y el
+      mensaje no llega **con el botón ya marcado como respondido**. Si pasa,
+      sacar el `parse_mode`.
+- [ ] El registro y el envío no son atómicos: `POST /sugerencia` inserta la
+      fila antes de que n8n mande el mensaje. Si n8n falla después, la
+      sugerencia queda sin contestar y la guarda de "no apilar" frena tres
+      días. Tolerable para un bot doméstico; si aparecen días en blanco sin
+      explicación, es por acá.
+- [ ] `tools.py:get_artist_graph` — el orden alfabético con `LIMIT 30`.
+- [ ] El objetivo de género `musica italiana` sigue sin matchear ningún
+      artista.
+---
+ 
+## Lo que dejó como método
+ 
+**Antes de escribir una regla sobre el usuario, mirar los datos del usuario.**
+La guarda de "ya escuchaste hoy" iba a matar el bloque entero, y la consulta
+que lo habría evitado son cinco líneas que ya se podían correr.
+ 
+**Un verificador que no corre no existe.** `verificar_sugerencias.py` estaba
+escrito y commiteado antes del deploy, y habría agarrado el cast faltante. La
+validación quedó pendiendo de que alguien se acordara, y no se acordó nadie.
+ 
+**Los seis bugs vivían en bordes.** Entre asyncpg y Postgres, entre el `.env` y
+pydantic, entre GMT y Córdoba, entre lo que el código creía medir y lo que el
+usuario hace. Ningún test unitario los toca, porque los seis son el encuentro
+del código con algo que no controla. Lo que sí los agarra, siempre, es
+verificar **contra la cosa real**: un `jsonb` de verdad, el evento crudo de
+mpv, un `PREPARE` contra Neon, seis días de `play_history`.
+ 
+Es la misma conclusión de `bitacora-eof-y-datos.md`, y que se repita
+literalmente en el bloque siguiente probablemente signifique que ya es la
+regla del proyecto y no un hallazgo.

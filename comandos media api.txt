@@ -201,6 +201,9 @@ curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
 curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
   "http://127.0.0.1:8000/sugerencia/preview?ignorar_guardas=true" | jq -r '.kind, .texto'
 
+https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage
+
+
 capacidad del disco rasp
 df -h / 
 
@@ -214,33 +217,6 @@ tail -40 ~/logs/media-api.log
 
 tail -f ~/logs/media-api.log
 
-https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage
-
-curl -s "https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/getMe" | jq
-
-curl -s "https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage" \
-  -H "Content-Type: application/json" \
-  -d '{"chat_id":937324746,"text":"prueba"}' | jq
-
-
-cd ~/Documents/media-asistente
-MEDIA_API_KEY=$(grep -E '^api_key=' .env | cut -d= -f2- | tr -d '"'"'"' ')
-TOKEN=8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78
-CHAT=937324746
-
-SUG=$(curl -s -H "X-API-Key: $MEDIA_API_KEY" -H "Content-Type: application/json" \
-  -d '{"room_id":"telegram","ignorar_hora":true}' \
-  http://127.0.0.1:8000/sugerencia)
-
-if ! echo "$SUG" | jq -e '.texto' >/dev/null 2>&1; then
-  echo "la API no devolvió una sugerencia:"; echo "$SUG" | jq .
-else
-  echo "$SUG" | jq .
-  curl -s "https://api.telegram.org/bot$TOKEN/sendMessage" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --argjson s "$SUG" --argjson chat "$CHAT" \
-        '{chat_id:$chat, text:$s.texto, reply_markup:{inline_keyboard:[$s.botones]}}')" | jq
-fi
 
 
 
