@@ -355,6 +355,11 @@ def _mover_breakpoint(mensajes: list) -> None:
             ultimo["cache_control"] = {"type": "ephemeral"}
 
 
+#: Marca de version del curador. Se imprime en cada playlist por el `via` y
+#: se puede grepear para saber que codigo produjo una linea del log.
+VERSION = "h7.1"
+
+
 async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
                  nota: str | None = None) -> dict:
     """`nota` es contexto que inclina la eleccion sin ser parte del pedido:
@@ -409,7 +414,8 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
             if block.type == "tool_use" and block.name == ENTREGA["name"]:
                 logger.info("tokens — in:%(in)d out:%(out)d "
                             "cache_r:%(cache_read)d cache_w:%(cache_write)d", uso)
-                data = _armar(dict(block.input), vistos, n_tracks)
+                data = _armar(dict(block.input), vistos, n_tracks,
+                              via=f"tool/{VERSION}")
                 data["usage"] = uso
                 return data
 
@@ -444,7 +450,7 @@ async def curate(prompt: str, n_tracks: int = 20, max_turns: int = 8,
 
 
 def _armar(data: dict, vistos: dict | None = None,
-           n_tracks: int = 20) -> dict:
+           n_tracks: int = 20, via: str = "?") -> dict:
     """Valida, enriquece desde la base y clasifica.
 
     Lo usan los dos caminos: la herramienta `entregar_playlist`, que es como
@@ -497,10 +503,14 @@ def _armar(data: dict, vistos: dict | None = None,
     con_nombre = sum(1 for t in tracks
                      if isinstance(t, dict) and (t.get("artist") or t.get("title")))
     rat = [len(str(t.get("rationale") or "")) for t in tracks if isinstance(t, dict)]
+    # `via` es la unica forma de distinguir "el schema se ignora" de "la Pi
+    # corre el codigo viejo". Las dos dan 14/14 y las dos se arreglan
+    # distinto; sin esto hay que adivinar, y adivinamos mal tres veces.
     logger.info("playlist %r: %d tracks (%d verificados, %d libres) · "
-                "salida: %d/%d con artist|title, rationale %d chars prom",
+                "via=%s · salida: %d/%d con artist|title, "
+                "rationale %d chars prom",
                 data.get("title"), len(validos),
-                metricas["verificados"], metricas["libres"],
+                metricas["verificados"], metricas["libres"], via,
                 con_nombre, len(tracks),
                 sum(rat) // max(len(rat), 1))
     return data
@@ -558,7 +568,7 @@ def _parse(resp, vistos: dict | None = None, n_tracks: int = 20) -> dict:
     except json.JSONDecodeError as e:
         logger.error("JSON inválido del curador:\n%s", texto[:1500])
         raise ValueError(f"el curador devolvió JSON inválido: {e}") from e
-    return _armar(data, vistos, n_tracks)
+    return _armar(data, vistos, n_tracks, via=f"texto/{VERSION}")
 
 
 def _clasificar(tracks: list[dict], vistos: dict,
