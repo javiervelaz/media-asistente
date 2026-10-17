@@ -63,7 +63,15 @@ SALIDA = Path(os.environ.get("MEZCLAS_DIR", "mezclas"))
 # despues aparece en el prompt ("british", "seen live").
 TAGS_RUIDO = {"seen live", "british", "english", "american", "uk", "usa",
               "argentina", "argentine", "male vocalists", "female vocalists",
-              "favorites", "favourite", "awesome", "classic"}
+              "favorites", "favourite", "awesome", "classic", "europe",
+              "liverpool", "film soundtrack", "soundtrack"}
+
+# Paises con voz en castellano. Decidir el idioma en codigo y no dejarselo a
+# Haiku: el prompt sale en ingles, y sin una instruccion explicita Lyria canta
+# en ingles aunque mezcles Spinetta con Charly.
+PAISES_CASTELLANO = {"AR", "ES", "MX", "CL", "UY", "CO", "PE", "VE", "CU",
+                     "BO", "PY", "EC", "PR", "DO", "GT", "CR", "PA", "SV",
+                     "HN", "NI"}
 
 
 # === 1-2: perfil desde el grafo ===============================================
@@ -125,7 +133,8 @@ Reglas duras:
 - Describi el sonido con lo que lo produce: genero y era, instrumentacion concreta, tipo de guitarra/teclado, groove y tempo (BPM aproximado), tipo de voz (registro, textura, actitud), armonias, produccion (analogica, cinta, reverb, etc.).
 - La fusion tiene que tomar algo reconocible de CADA perfil, no promediarlos en un genero generico.
 - Prompt en ingles, maximo 90 palabras, una sola linea.
-- Si te piden instrumental, termina el prompt con "Instrumental, no vocals."
+- Si te piden instrumental, termina el prompt con "Instrumental, no vocals." e ignora idioma_voz.
+- Si no es instrumental, el prompt TIENE que indicar el idioma de la voz segun idioma_voz: "Vocals and lyrics in Spanish." o "Vocals and lyrics in English.". Si idioma_voz es "es", cualquier letra que escribas va en castellano rioplatense.
 
 Respondes SOLO con JSON valido, sin markdown:
 {"prompt": "...", "titulo": "titulo corto en castellano para el archivo"}"""
@@ -160,11 +169,24 @@ def _parse_json(raw: str) -> dict:
     return data
 
 
-def traducir(perfiles: list[dict], instrumental: bool) -> dict:
+def idioma_voz(perfiles: list[dict], forzado: str = "auto") -> str:
+    """'es' si algun artista es de un pais hispanohablante, si no 'en'.
+
+    Basta con uno: si mezclas Charly con Depeche Mode lo que queres es synth-pop
+    cantado en castellano, no un tema en ingles con un teclado ochentoso.
+    """
+    if forzado in ("es", "en"):
+        return forzado
+    paises = {(p.get("pais") or "").upper() for p in perfiles}
+    return "es" if paises & PAISES_CASTELLANO else "en"
+
+
+def traducir(perfiles: list[dict], instrumental: bool,
+             idioma: str = "en") -> dict:
     client = Anthropic(api_key=settings.anthropic_api_key)
     prohibidos = nombres_prohibidos(perfiles)
-    pedido = json.dumps({"perfiles": perfiles, "instrumental": instrumental},
-                        ensure_ascii=False)
+    pedido = json.dumps({"perfiles": perfiles, "instrumental": instrumental,
+                         "idioma_voz": idioma}, ensure_ascii=False)
     mensajes = [{"role": "user", "content": pedido}]
 
     for intento in (1, 2):
@@ -254,6 +276,9 @@ async def main() -> int:
     ap.add_argument("--completa", action="store_true",
                     help=f"tema completo con {MODELO_COMPLETO} (US$0.08)")
     ap.add_argument("--instrumental", action="store_true")
+    ap.add_argument("--idioma", choices=("auto", "es", "en"), default="auto",
+                    help="idioma de la voz; auto = castellano si algun "
+                         "artista es de un pais hispanohablante")
     ap.add_argument("--play", action="store_true", help="reproducir en mpv")
     ap.add_argument("--dry-run", action="store_true",
                     help="solo mostrar el prompt, no llama a Lyria")
@@ -270,7 +295,11 @@ async def main() -> int:
             logger.info("%s | %s | %s | %s", p["nombre"], p["decada_fuerte"],
                         p["pais"], ", ".join(p["tags"]) or "sin tags")
 
-        trad = await asyncio.to_thread(traducir, perfiles, args.instrumental)
+        idioma = idioma_voz(perfiles, args.idioma)
+        if not args.instrumental:
+            logger.info("voz en %s", "castellano" if idioma == "es" else "ingles")
+        trad = await asyncio.to_thread(traducir, perfiles, args.instrumental,
+                                       idioma)
         print(f"\nPROMPT ({len(trad['prompt'].split())} palabras):\n"
               f"{trad['prompt']}\n")
         if args.dry_run:
@@ -285,6 +314,7 @@ async def main() -> int:
             "mbids": [p["mbid"] for p in perfiles],
             "perfiles": perfiles,
             "prompt": trad["prompt"],
+            "idioma_voz": None if args.instrumental else idioma,
             "modelo": modelo,
             "costo_usd": COSTO_USD[modelo],
             "letra_y_estructura": letra,
