@@ -1,0 +1,17 @@
+# Dependencias del spike de mashup. NO van en pyproject: torch pesa ~2 GB y
+# la Pi no lo necesita. Se instalan solo en la notebook:
+#
+#   1) torch con CUDA PRIMERO (si no, pip baja la version CPU):
+#        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+#   2) el resto:
+#        pip install -r scripts/requirements-mashup.txt
+#   3) ffmpeg en el PATH:  winget install ffmpeg
+#
+# Opcional, mejor calidad al estirar/transponer la voz: el binario
+# `rubberband` en el PATH + pyrubberband. Sin eso usa librosa.
+demucs==4.0.1
+librosa>=0.10
+soundfile>=0.12
+yt-dlp
+numpy
+# pyrubberband
