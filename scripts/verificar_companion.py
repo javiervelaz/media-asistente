@@ -67,7 +67,8 @@ check("ventana vacia nunca duerme", not en_ventana(3, 5, 5))
 # ------------------------------------------------------------------ 2. state.leer
 print("state.leer")
 
-ESTADO = {"mpv": {}, "path": "", "track": None, "row": None, "db_falla": False}
+ESTADO = {"mpv": {}, "path": "", "track": None, "row": None, "db_falla": False,
+          "cola": []}
 
 
 async def fake_status():
@@ -83,6 +84,7 @@ async def fake_fetchrow(_sql, _yid):
 state.player.get_status = fake_status
 state.player.track_en_curso = lambda: {"path": ESTADO["path"]}
 state.history.get_track_at = lambda pos: ESTADO["track"]
+state.history.get_current = lambda: {"playlist_id": "p1", "tracks": ESTADO["cola"]}
 state.fetchrow = fake_fetchrow
 
 
@@ -110,6 +112,22 @@ check("now_playing con metadata", s["mode"] == "now_playing" and t.get("album") 
 check("tapa de Cover Art Archive", t.get("cover_source") == "caa" and "rg-uuid" in (t.get("cover") or ""))
 check("vinilo marcado", t.get("from_vinyl") is True)
 check("rationale viaja", t.get("rationale") == "porque si")
+check("sin playlist en memoria -> cola vacia, no error",
+      s["queue"]["total"] == 0 and s["queue"]["items"] == [])
+
+ESTADO["cola"] = [{"title": f"T{i}", "artist": "A", "youtube_id": f"y{i}"} for i in range(14)]
+q = run(state.leer())["queue"]
+check("cola completa con posicion", q["total"] == 14 and q["position"] == 0
+      and len(q["items"]) == 14 and q["items"][3]["title"] == "T3")
+ESTADO["cola"] = [{"title": f"T{i}", "artist": "A"} for i in range(100)]
+q = state.cola(60)
+check("cola larga -> ventana alrededor del actual",
+      len(q["items"]) == state.MAX_QUEUE and q["offset"] == 55
+      and q["items"][q["position"] - q["offset"]]["title"] == "T60")
+q = state.cola(98)
+check("ventana al final no se pasa", q["offset"] + len(q["items"]) == 100
+      and q["items"][98 - q["offset"]]["title"] == "T98")
+ESTADO["cola"] = []
 
 state._cache.clear()
 ESTADO["row"] = None

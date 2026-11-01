@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 CAA_URL = "https://coverartarchive.org/release-group/{rg}/front-500"
 YT_THUMB = "https://i.ytimg.com/vi/{yid}/hqdefault.jpg"
 
+#: Techo de temas que viajan en `queue`. Una playlist del curador ronda los
+#: 14; un replay largo puede ser mas. Con 40 el mensaje sigue chico para el
+#: ESP32 y si la lista es mas larga se manda una ventana alrededor del tema
+#: actual (por eso existe `offset`).
+MAX_QUEUE = 40
+
 SQL_META = """
 SELECT rl.title                                      AS album,
        rl.release_group_mbid::text                   AS rg,
@@ -81,13 +87,13 @@ async def leer() -> dict:
     hub, que es el que lleva la memoria (desde cuando hay silencio)."""
     st = await player.get_status()
     if not st.get("mpv_ok"):
-        return {"mode": "offline", "track": None, "playback": None}
+        return {"mode": "offline", "track": None, "playback": None, "queue": None}
 
     pos = st.get("playlist_pos")
     hay_track = (pos is not None and pos >= 0
                  and (st.get("playlist_count") or 0) > 0)
     if not hay_track:
-        return {"mode": "idle", "track": None, "playback": None}
+        return {"mode": "idle", "track": None, "playback": None, "queue": None}
 
     path = player.track_en_curso().get("path") or ""
     yid = player._yid_de_path(path)
@@ -118,7 +124,22 @@ async def leer() -> dict:
         "duration_sec": st.get("duration_sec"),
         "volume": st.get("volume"),
     }
-    return {"mode": "now_playing", "track": track, "playback": playback}
+    return {"mode": "now_playing", "track": track, "playback": playback,
+            "queue": cola(pos)}
+
+
+def cola(pos: int) -> dict:
+    """La playlist en curso, liviana: solo titulo y artista por tema. Sin
+    consultas a la base — es lo que ya esta en memoria, asi que sale gratis
+    en cada poll. Vacia si el servicio arranco y no pudo restaurarla."""
+    tracks = (history.get_current() or {}).get("tracks") or []
+    total = len(tracks)
+    desde = 0
+    if total > MAX_QUEUE:
+        desde = max(0, min(pos - 5, total - MAX_QUEUE))
+    items = [{"title": t.get("title"), "artist": t.get("artist")}
+             for t in tracks[desde:desde + MAX_QUEUE]]
+    return {"position": pos, "total": total, "offset": desde, "items": items}
 
 
 def ahora_local(tz) -> datetime:

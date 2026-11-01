@@ -26,10 +26,17 @@ Se manda al conectar, cada vez que cambia algo que se ve y como latido cada 15 s
     "artist_in_collection": true,
     "rationale": "…"              // por qué lo eligió el curador, si lo hay
   },
-  "playback": { "paused": false, "position_sec": 95.2, "duration_sec": 271.0, "volume": 70 }
+  "playback": { "paused": false, "position_sec": 95.2, "duration_sec": 271.0, "volume": 70 },
+  "queue": {
+    "position": 3,                // índice del tema actual en la playlist completa
+    "total": 14,
+    "offset": 0,                  // índice del primer elemento de items
+    "items": [ { "title": "…", "artist": "…" } ]
+  }
 }
 ```
-- `track` y `playback` son `null` fuera de `now_playing`.
+- `track`, `playback` y `queue` son `null` fuera de `now_playing`.
+- `queue.items` trae como máximo 40 temas. Si la playlist es más larga, viaja una ventana alrededor del tema actual: el tema `i` de `items` es el `offset + i` de la playlist. `total` puede crecer mientras suena, porque los temas se siguen resolviendo en background.
 - **La posición la interpola el cliente** con su propio reloj desde que llegó el mensaje. `server_ts` sirve para logs, no para sincronizar: el reloj de la Pi y el del cliente no tienen por qué coincidir.
 
 ## `message`: texto para mostrar (A3)

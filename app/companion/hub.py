@@ -38,9 +38,11 @@ def _clave(snap: dict) -> tuple:
     """Lo que, si cambia, justifica mandar un mensaje."""
     t = snap.get("track") or {}
     p = snap.get("playback") or {}
+    q = snap.get("queue") or {}
+    # total cambia cuando la resolucion en background suma temas a la cola.
     return (snap.get("mode"), snap.get("mood"), t.get("youtube_id"),
             t.get("title"), t.get("cover"), p.get("paused"), p.get("volume"),
-            p.get("duration_sec"))
+            p.get("duration_sec"), q.get("position"), q.get("total"))
 
 
 class Hub:
