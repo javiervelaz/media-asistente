@@ -20,11 +20,31 @@ RUNTIME = os.environ["YTDLP_JS_RUNTIME"]
 CLIENT = os.environ.get("YT_PLAYER_CLIENT", "").strip()
 POT = os.environ["POT_PROVIDER_URL"]
 CACHE = Path(os.environ["TRACK_CACHE_DIR"])
-MAX_BYTES = int(os.environ.get("TRACK_CACHE_GB", "4")) * 1024**3
+
+
+def _numero_env(nombre: str, default: float) -> float:
+    """Opcional con default: un valor raro cae al default y avisa, nunca
+    levanta. `TRACK_CACHE_GB=1.2` con int() mato el import de este modulo y
+    con el uvicorn entero (31/10) — la misma falla que la hora "10:30" de H5,
+    en otro archivo."""
+    crudo = os.environ.get(nombre, "").strip()
+    if not crudo:
+        return default
+    try:
+        v = float(crudo)
+        if v <= 0:
+            raise ValueError
+        return v
+    except ValueError:
+        logger.error("%s=%r invalido; uso %s", nombre, crudo, default)
+        return default
+
+
+MAX_BYTES = int(_numero_env("TRACK_CACHE_GB", 4) * 1024**3)
 # Piso de espacio libre real del filesystem, no solo del tamaño del cache:
 # el disco se puede llenar por algo ajeno (logs, Postgres local, el SO) y
 # ahí MAX_BYTES por sí solo no garantiza que quede lugar para bajar algo.
-MIN_FREE_BYTES = int(os.environ.get("TRACK_CACHE_MIN_FREE_MB", "500")) * 1024**2
+MIN_FREE_BYTES = int(_numero_env("TRACK_CACHE_MIN_FREE_MB", 500) * 1024**2)
 
 AUDIO_CACHE = CACHE / "audio"
 VIDEO_CACHE = CACHE / "video"
