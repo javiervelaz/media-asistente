@@ -177,6 +177,14 @@ def repreguntar(texto: str) -> str:
 def error(detalle: str) -> str:
     return f"No pude: {detalle}"
 
+
+def en_curso() -> str:
+    """Acuse de un turno que no termino a tiempo para el request.
+
+    La respuesta real llega despues como mensaje aparte (ver app.notify).
+    """
+    return "Lo estoy armando, tarda un toque. Te aviso apenas arranque."
+
 # ============================================================== H2: lectura
 #
 # Todo lo de aca abajo reemplaza turnos que costaban ~19k tokens. Ninguna de

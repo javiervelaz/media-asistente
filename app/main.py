@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
-from app import local_search, player, tracks
+from app import local_search, notify, player, tracks
 from app.auth import verify_api_key
 from app.harness import executors as harness_exec, goals
 from app.harness import render as harness_render
@@ -971,7 +971,44 @@ async def chat(req: ChatRequest):
     texto = (req.text or "").strip()
     if not texto:
         raise HTTPException(400, "mandá 'text'")
-    return await harness_responder(texto, req.session_id, req.room_id)
+
+    # El turno corre como task propia y no colgado del request: si Cloudflare
+    # o n8n cortan la conexion, la playlist igual termina de armarse.
+    turno = _fire(harness_responder(texto, req.session_id, req.room_id))
+    hechas, _ = await asyncio.wait({turno}, timeout=settings.chat_timeout_sync)
+    if turno in hechas:
+        return turno.result()
+
+    # No llego. Cloudflare corta a los 120 s y una playlist del curador tarda
+    # ~180: esperar mas es un 524 seguro. Se contesta un acuse y la respuesta
+    # real sale por Telegram cuando el turno termina. turn_log la registra
+    # igual, con su latencia completa, desde `responder`.
+    _fire(_entregar_tarde(turno, req.session_id))
+    logger.info("turno lento (> %.0f s), respuesta diferida a %s",
+                settings.chat_timeout_sync, req.session_id)
+    return {
+        "reply": harness_render.en_curso(),
+        "intent": "en_curso",
+        "stage": "async",
+        "confidence": 1.0,
+        "ok": True,
+        "free": True,
+        "cost_tokens": 0,
+        "latency_ms": int(settings.chat_timeout_sync * 1000),
+        "actions": [],
+        "async": True,
+    }
+
+
+async def _entregar_tarde(turno: "asyncio.Task", session_id: str) -> None:
+    """Espera el turno diferido y manda su respuesta por Telegram."""
+    try:
+        resp = await turno
+        texto = (resp or {}).get("reply") or "Listo."
+    except Exception:
+        logger.exception("turno diferido fallo (%s)", session_id)
+        texto = harness_render.error("terminar ese pedido, probá de nuevo")
+    await notify.telegram(session_id, texto)
 
 
 # === Controles ===

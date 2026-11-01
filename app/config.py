@@ -99,6 +99,16 @@ class Settings(BaseSettings):
     # escuchando" — y eso se mide en horas, no en dias.
     harness_sugerencia_gracia_horas: int = 3
 
+    # --- /chat detras de Cloudflare ---
+    # Cloudflare corta cualquier respuesta a los 120 s y una playlist del
+    # curador tarda ~180. Si el turno no termino en este tiempo, /chat
+    # contesta un acuse y el resultado sale por Telegram cuando este listo.
+    # Muy por debajo de 120 a proposito: n8n tambien espera.
+    chat_timeout_sync: float = 25.0
+    # Token del bot, para mandar las respuestas tardias desde la Pi. Vacio =
+    # la playlist suena igual pero el mensaje final se pierde (y se loguea).
+    telegram_bot_token: str = ""
+
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 
     # --- validadores tolerantes -------------------------------------------
@@ -169,6 +179,25 @@ class Settings(BaseSettings):
             logger.error("%s=%r no es un entero; uso %d",
                          info.field_name, v, default)
             return default
+
+    @field_validator("chat_timeout_sync", mode="before")
+    @classmethod
+    def _timeout_chat(cls, v):
+        """Opcional con default: un typo no puede tumbar el import. Se
+        acota a 1..100 s — por encima de eso Cloudflare gana la carrera."""
+        default = 25.0
+        if v is None or v == "":
+            return default
+        try:
+            t = float(str(v).strip().rstrip("s"))
+        except (TypeError, ValueError):
+            logger.error("chat_timeout_sync=%r invalido; uso %s", v, default)
+            return default
+        if not 1 <= t <= 100:
+            logger.error("chat_timeout_sync=%s fuera de 1..100; uso %s",
+                         t, default)
+            return default
+        return t
 
     @field_validator("harness_sugerencia_min_aceptacion", mode="before")
     @classmethod
