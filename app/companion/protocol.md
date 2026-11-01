@@ -50,7 +50,13 @@ El touch de la placa y los botones del simulador mandan, por el mismo WebSocket:
 ```json
 { "type": "control", "action": "next" }
 ```
-Acciones: `toggle` (play/pausa según el estado), `play`, `pause`, `next`, `prev`, `stop`, `volume_up`, `volume_down` (±5).
+Acciones: `toggle` (play/pausa según el estado), `play`, `pause`, `next`, `prev`, `stop`, `volume_up`, `volume_down` (±5) y `jump`.
+
+`jump` salta a un tema de la playlist y lleva el índice (0-based, sobre la playlist completa, es decir `queue.offset + i`):
+```json
+{ "type": "control", "action": "jump", "index": 7 }
+```
+**No cuenta como skip** del tema que sonaba: se registra con motivo `"jump"`, que guarda cuánto se escuchó sin marcar `skipped`. También existe por HTTP: `POST /control/jump {"index": 7}`.
 
 Corren **el mismo código que `/control/*`**: cancelan el fade y `next`/`prev` registran el avance en `play_history`, igual que desde Telegram. Charly responde solo a ese cliente:
 ```json

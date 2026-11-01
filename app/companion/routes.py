@@ -38,12 +38,14 @@ PREVIEW = Path(__file__).parent / "static" / "preview.html"
 HELLO_TIMEOUT_S = 5.0
 
 #: accion -> coroutine sin argumentos. Lo llena main.py en el lifespan.
-_controles: dict[str, Callable[[], Awaitable]] = {}
+_controles: dict[str, Callable[..., Awaitable]] = {}
 ACCIONES = ("toggle", "play", "pause", "next", "prev", "stop",
-            "volume_up", "volume_down")
+            "volume_up", "volume_down", "jump")
+#: Acciones que reciben el indice del tema (0-based, sobre la playlist entera).
+CON_INDICE = {"jump"}
 
 
-def set_controles(mapa: dict[str, Callable[[], Awaitable]]) -> None:
+def set_controles(mapa: dict[str, Callable[..., Awaitable]]) -> None:
     desconocidas = set(mapa) - set(ACCIONES)
     if desconocidas:
         raise ValueError(f"acciones fuera del protocolo: {desconocidas}")
@@ -58,7 +60,14 @@ async def _ejecutar(msg: dict) -> dict:
         return {"type": "ack", "action": accion, "ok": False,
                 "error": "accion desconocida"}
     try:
-        await fn()
+        if accion in CON_INDICE:
+            idx = msg.get("index")
+            if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
+                return {"type": "ack", "action": accion, "ok": False,
+                        "error": "falta 'index' (entero >= 0)"}
+            await fn(idx)
+        else:
+            await fn()
     except Exception as e:   # HTTPException(503) de mpv incluida
         detalle = getattr(e, "detail", None) or str(e) or e.__class__.__name__
         logger.warning("companion: control %s fallo: %s", accion, detalle)

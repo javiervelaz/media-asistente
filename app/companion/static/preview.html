@@ -51,6 +51,7 @@
   .row .tt { font-size:17px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row .ar { font-size:13px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row > div:last-child { min-width:0; }
+  .row { cursor:pointer; } .row:active { background:#1c2a40; }
   .row.past { opacity:.4; }
   .row.cur { background:#14243a; } .row.cur .tt { color:var(--accent); font-weight:700; } .row.cur .n { color:var(--accent); }
   #wrap { width:480px; height:480px; transform-origin:top left; }
@@ -97,7 +98,7 @@
   <button data-a="volume_up" title="subir volumen">🔊</button>
   <button data-a="next" title="siguiente">⏭</button>
 </div>
-<div id="hint">☰ o mantené apretada la pantalla = ver la playlist (tocá el título para volver).<br>
+<div id="hint">☰ o mantené apretada la pantalla = ver la playlist. Tocá un tema para saltar a él (no cuenta como skip); tocá el título para volver.<br>
 En la pantalla: tocá = play/pausa · deslizá ← siguiente · → anterior · ↑↓ volumen.<br>
 Son los mismos gestos que va a tener la placa.</div>
 <div id="panel">
@@ -223,7 +224,7 @@ function renderList(scroll) {
   $("lcount").textContent = `${q.position + 1} de ${q.total}`;
   $("items").innerHTML = q.items.map((t, i) => {
     const n = q.offset + i, cls = n < q.position ? "past" : n === q.position ? "cur" : "";
-    return `<div class="row ${cls}"><div class="n">${n === q.position ? "▶" : n + 1}</div>
+    return `<div class="row ${cls}" data-i="${n}"><div class="n">${n === q.position ? "▶" : n + 1}</div>
             <div><div class="tt">${esc(t.title)}</div><div class="ar">${esc(t.artist)}</div></div></div>`;
   }).join("");
   if (scroll || q.position !== lastListPos) {
@@ -239,6 +240,17 @@ function showList(on) {
   $("screen").classList.toggle("listing", listing);
   if (listing) { renderList(true); bumpList(); } else clearTimeout(listTimer);
 }
+// Tocar un tema de la lista salta a el. No cuenta como skip del que sonaba:
+// Charly lo registra con motivo "jump".
+$("items").addEventListener("click", e => {
+  const row = e.target.closest(".row[data-i]");
+  if (!row || !S.queue) return;
+  const i = +row.dataset.i;
+  if (i === S.queue.position) return;
+  bumpList();
+  control("jump", { index: i });
+  if (demoTimer) { S.queue = { ...S.queue, position: i }; renderList(false); }   // demo: simula el salto
+});
 $("items").addEventListener("scroll", () => listing && bumpList(), { passive: true });
 
 function tick(now) {
@@ -314,16 +326,16 @@ function demo() {
 }
 
 // ---------------------------------------------------------------- controles
-const ICON = { toggle:"⏯", play:"▶", pause:"⏸", next:"⏭", prev:"⏮", stop:"⏹", volume_up:"🔊", volume_down:"🔉" };
+const ICON = { jump:"↪", toggle:"⏯", play:"▶", pause:"⏸", next:"⏭", prev:"⏮", stop:"⏹", volume_up:"🔊", volume_down:"🔉" };
 let flashTimer;
 function flash(txt) {
   const f = $("flash"); f.textContent = txt; f.classList.add("on");
   clearTimeout(flashTimer); flashTimer = setTimeout(() => f.classList.remove("on"), 450);
 }
-function control(action) {
+function control(action, extra = {}) {
   flash(ICON[action] || "•");
   if (navigator.vibrate) navigator.vibrate(15);
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "control", action }));
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "control", action, ...extra }));
   else if (!demoTimer) $("status").textContent = "sin conexión: no se pudo mandar";
 }
 function onAck(m) {

@@ -197,7 +197,12 @@ with TestClient(app) as client:
     async def fake_pause():
         raise RuntimeError("mpv no responde")
 
-    set_controles({"next": fake_next, "pause": fake_pause})
+    saltos: list[int] = []
+
+    async def fake_jump(i):
+        saltos.append(i)
+
+    set_controles({"next": fake_next, "pause": fake_pause, "jump": fake_jump})
     with client.websocket_connect("/companion/ws", headers={"x-api-key": KEY}) as ws:
         ws.receive_json()                      # estado inicial
 
@@ -214,6 +219,21 @@ with TestClient(app) as client:
         a = ack_de("pause")
         check("control que falla -> ack ok=false con error",
               a.get("ok") is False and "mpv" in (a.get("error") or ""))
+        ws.send_json({"type": "control", "action": "jump", "index": 7})
+        a = {}
+        for _ in range(50):
+            a = ws.receive_json()
+            if a.get("type") == "ack":
+                break
+        check("jump lleva el indice al handler", saltos == [7] and a.get("ok") is True)
+        a = ack_de("jump")                     # sin index
+        check("jump sin index -> ack ok=false", a.get("ok") is False and saltos == [7])
+        ws.send_json({"type": "control", "action": "jump", "index": True})
+        for _ in range(50):
+            a = ws.receive_json()
+            if a.get("type") == "ack":
+                break
+        check("jump con index booleano -> rechazado", a.get("ok") is False and saltos == [7])
         a = ack_de("volar")
         check("accion desconocida -> ack ok=false", a.get("ok") is False)
     try:
@@ -224,6 +244,67 @@ with TestClient(app) as client:
 
     r = client.get("/companion/preview")
     check("preview se sirve", r.status_code == 200 and "480" in r.text)
+
+# ------------------------------------------------------------------ 4. /control/jump
+print("control/jump (main)")
+import app.main as main_mod                                  # noqa: E402
+
+registros: list[str] = []
+saltado: list[int] = []
+MPV = {"mpv_ok": True, "playlist_pos": 2, "playlist_count": 10}
+
+
+async def jm_status():
+    return dict(MPV)
+
+
+async def jm_advance(motivo="next"):
+    registros.append(motivo)
+
+
+async def jm_play_index(i):
+    saltado.append(i)
+
+
+main_mod.player.get_status = jm_status
+main_mod.player.play_index = jm_play_index
+main_mod.register_advance = jm_advance
+cli = TestClient(main_mod.app)                     # sin `with`: no corre el lifespan
+H = {"x-api-key": KEY}
+r = cli.post("/control/jump", json={"index": 6}, headers=H)
+check("jump salta y registra motivo 'jump' (no skip)",
+      r.status_code == 200 and saltado == [6] and registros == ["jump"], r.text)
+r = cli.post("/control/jump", json={"index": 2}, headers=H)
+check("jump al tema que ya suena -> no hace nada", r.status_code == 200 and saltado == [6])
+r = cli.post("/control/jump", json={"index": 10}, headers=H)
+check("jump fuera de la cola -> 400", r.status_code == 400 and saltado == [6])
+MPV["mpv_ok"] = False
+r = cli.post("/control/jump", json={"index": 3}, headers=H)
+check("jump con mpv caido -> 503", r.status_code == 503)
+
+# El register_advance REAL: lo que se escribe en play_history con cada motivo.
+from app import history as hist                              # noqa: E402
+
+escrito: list[tuple] = []
+
+
+async def hx_execute(_sql, played_ms, skipped, playlist_id, pos):
+    escrito.append((played_ms, skipped))
+    return "UPDATE 1"
+
+
+async def hx_status():
+    return {"mpv_ok": True, "playlist_pos": 0, "position_sec": 5.0}  # 5 s: zona de skip
+
+
+hist.execute = hx_execute
+hist.player.get_status = hx_status
+hist.set_current("p1", [{"artist": "A", "title": "T", "youtube_id": "y"}])
+asyncio.run(hist.register_advance("next"))
+asyncio.run(hist.register_advance("jump"))
+check("a los 5 s, 'next' marca skip", escrito[0] == (5000, True), str(escrito))
+check("a los 5 s, 'jump' NO marca skip (pero guarda lo escuchado)",
+      len(escrito) > 1 and escrito[1] == (5000, False), str(escrito))
 
 print()
 if fallas:

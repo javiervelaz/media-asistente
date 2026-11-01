@@ -127,6 +127,13 @@ async def prev_track() -> None:
     await _cmd(["playlist-prev"])
 
 
+async def play_index(index: int) -> None:
+    """Salta al tema `index` de la cola (0-based) y lo deja sonando.
+    `playlist-pos` en vez de `playlist-play-index`: anda en cualquier mpv."""
+    await _cmd(["set_property", "playlist-pos", int(index)])
+    await _cmd(["set_property", "pause", False])
+
+
 async def restart_track() -> None:
     """Vuelve al principio del tema actual sin recargarlo."""
     await _cmd(["seek", 0, "absolute"])

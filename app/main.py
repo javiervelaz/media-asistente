@@ -74,6 +74,7 @@ async def lifespan(app: FastAPI):
         "stop": ctl_stop,
         "volume_up": lambda: ctl_volume(VolumeRequest(delta=5)),
         "volume_down": lambda: ctl_volume(VolumeRequest(delta=-5)),
+        "jump": lambda i: ctl_jump(JumpRequest(index=i)),
     })
     yield
     await companion_hub.cerrar()
@@ -111,6 +112,10 @@ class DespertadorRequest(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str
+
+
+class JumpRequest(BaseModel):
+    index: int                  # 0-based, sobre la playlist en curso
 
 
 class VolumeRequest(BaseModel):
@@ -1091,6 +1096,30 @@ async def ctl_stop():
     try:
         await player.stop()
         return {"ok": True}
+    except MPVError as e:
+        raise HTTPException(503, str(e))
+
+
+@app.post("/control/jump", dependencies=[Depends(verify_api_key)])
+async def ctl_jump(req: JumpRequest):
+    """Salta a un tema de la cola. Elegir de la lista NO es rechazar el tema
+    que estaba sonando: se registra como avance con motivo "jump", que
+    guarda cuanto se escucho pero no marca skip (solo "next" puede
+    marcarlo). Asi saltar 5 temas desde la pantalla no castiga a ninguno
+    en el ranking."""
+    st = await player.get_status()
+    if not st.get("mpv_ok"):
+        raise HTTPException(503, "mpv no responde")
+    total = st.get("playlist_count") or 0
+    if not 0 <= req.index < total:
+        raise HTTPException(400, f"index fuera de la cola (0..{total - 1})")
+    if req.index == st.get("playlist_pos"):
+        return {"ok": True, "index": req.index}      # ya esta sonando
+    _cancel_fade()
+    await register_advance("jump")          # antes de saltar, como next/prev
+    try:
+        await player.play_index(req.index)
+        return {"ok": True, "index": req.index}
     except MPVError as e:
         raise HTTPException(503, str(e))
 
