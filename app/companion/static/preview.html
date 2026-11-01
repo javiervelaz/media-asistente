@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compañero · simulador 480×480</title>
+<style>
+  :root { --bg:#0b0f17; --fg:#e8edf5; --dim:#8a97ad; --accent:#5ac8ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; gap:14px; background:#1b2130; color:var(--fg);
+         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  /* La "placa": 480x480 exactos, como la Waveshare de 4" */
+  #screen { position:relative; width:480px; height:480px; background:var(--bg); overflow:hidden;
+            border-radius:14px; box-shadow:0 0 0 10px #05070b, 0 20px 50px #0008; }
+  #face { position:absolute; left:0; top:0; width:480px; }
+  #cover { position:absolute; left:24px; top:170px; width:200px; height:200px; border-radius:10px;
+           object-fit:cover; background:#151b27; display:none; box-shadow:0 6px 18px #0007; }
+  #info { position:absolute; left:244px; top:176px; width:216px; display:none; }
+  #title { font-size:22px; font-weight:700; line-height:1.15; max-height:78px; overflow:hidden; }
+  #artist { margin-top:8px; font-size:17px; color:var(--accent); }
+  #album { margin-top:6px; font-size:14px; color:var(--dim); max-height:38px; overflow:hidden; }
+  #badge { display:none; margin-top:12px; font-size:13px; padding:4px 10px; border-radius:20px;
+           background:#3a1f2b; color:#ff9ec4; width:max-content; }
+  #bar { position:absolute; left:24px; right:24px; top:398px; height:6px; border-radius:3px;
+         background:#1f2737; display:none; }
+  #bar > div { height:100%; width:0; border-radius:3px; background:var(--accent); }
+  #times { position:absolute; left:24px; right:24px; top:410px; display:none; justify-content:space-between;
+           font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  #clock { position:absolute; width:100%; top:330px; text-align:center; font-size:56px; font-weight:200;
+           font-variant-numeric:tabular-nums; letter-spacing:2px; }
+  #status { position:absolute; width:100%; bottom:22px; text-align:center; font-size:14px; color:var(--dim); }
+  #bubble { position:absolute; left:20px; right:20px; bottom:20px; padding:14px 16px; border-radius:14px;
+            background:#e8edf5; color:#0b0f17; font-size:17px; line-height:1.3; display:none; }
+  .np #cover, .np #info { display:block; } .np #bar { display:block; } .np #times { display:flex; }
+  .np #clock { display:none; }
+  #panel { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--dim); }
+  #panel input { background:#0b0f17; color:var(--fg); border:1px solid #334; border-radius:6px; padding:6px 8px; width:220px; }
+  #panel button { background:#2a3448; color:var(--fg); border:0; border-radius:6px; padding:7px 12px; cursor:pointer; }
+</style>
+</head>
+<body>
+<div id="screen">
+  <canvas id="face" width="480" height="320"></canvas>
+  <img id="cover" alt="">
+  <div id="info">
+    <div id="title"></div><div id="artist"></div><div id="album"></div>
+    <div id="badge">● de tu colección</div>
+  </div>
+  <div id="bar"><div></div></div>
+  <div id="times"><span id="t0">0:00</span><span id="t1">0:00</span></div>
+  <div id="clock"></div>
+  <div id="status">conectando…</div>
+  <div id="bubble"></div>
+</div>
+<div id="panel">
+  <span id="info2">humor: —</span>
+  <input id="key" type="password" placeholder="api key de Charly">
+  <button id="go">Conectar</button>
+  <button id="demo">Demo sin servidor</button>
+</div>
+
+<script>
+// ---------------------------------------------------------------- estado
+const $ = id => document.getElementById(id);
+const screen = $("screen"), cv = $("face"), g = cv.getContext("2d");
+let S = { mode: "idle", mood: "tranquilo", track: null, playback: null };
+let pos = { base: 0, at: 0, dur: 0, paused: true };
+let blinkUntil = 0, nextBlink = performance.now() + 2500, bounceUntil = 0;
+
+const MOOD_COLOR = { encantado:"#ff6fa8", contento:"#ffd166", atento:"#5ac8ff", expectante:"#b39dff",
+  tranquilo:"#7fd1b9", aburrido:"#8a97ad", dormido:"#5b6b8c", confundido:"#ff8a5c" };
+
+// ---------------------------------------------------------------- cara
+// Todo es geometria simple (arcos, rectangulos redondeados, lineas) a
+// proposito: es lo que LVGL dibuja sin sudar en el ESP32-S3.
+function rr(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+function heart(x, y, s) {
+  g.beginPath(); g.moveTo(x, y + s * .35);
+  g.bezierCurveTo(x, y - s * .2, x - s, y - s * .2, x - s, y + s * .2);
+  g.bezierCurveTo(x - s, y + s * .6, x, y + s * .85, x, y + s * 1.05);
+  g.bezierCurveTo(x, y + s * .85, x + s, y + s * .6, x + s, y + s * .2);
+  g.bezierCurveTo(x + s, y - s * .2, x, y - s * .2, x, y + s * .35); g.fill();
+}
+
+function drawFace(now) {
+  const big = S.mode !== "now_playing";
+  const H = big ? 320 : 160; cv.style.height = H + "px"; cv.height = H;
+  const cx = 240, cy = big ? 175 : 85, s = big ? 1.25 : .8;
+  const mood = S.mood, col = MOOD_COLOR[mood] || "#e8edf5";
+  g.clearRect(0, 0, 480, H);
+  g.fillStyle = col; g.strokeStyle = col; g.lineCap = "round"; g.lineWidth = 9 * s;
+
+  if (now > nextBlink) { blinkUntil = now + 140; nextBlink = now + 2500 + Math.random() * 3500; }
+  const blinking = now < blinkUntil && !["dormido","contento","encantado"].includes(mood);
+  const lookX = Math.sin(now / 1900) * 9 * s, lookY = Math.cos(now / 2700) * 5 * s;
+  const hop = now < bounceUntil ? -Math.abs(Math.sin((bounceUntil - now) / 60)) * 14 * s : 0;
+  const ex = 78 * s, y = cy + hop;
+
+  for (const side of [-1, 1]) {
+    const x = cx + side * ex;
+    if (blinking) { g.beginPath(); g.moveTo(x - 30 * s, y); g.lineTo(x + 30 * s, y); g.stroke(); continue; }
+    switch (mood) {
+      case "contento":
+        g.beginPath(); g.arc(x, y + 12 * s, 30 * s, Math.PI * 1.1, Math.PI * 1.9); g.stroke(); break;
+      case "encantado":
+        heart(x, y - 26 * s, 30 * s); break;
+      case "dormido":   // parpados cerrados: linea recta, nada de sonrisa
+        g.beginPath(); g.moveTo(x - 28 * s, y + 8 * s); g.lineTo(x + 28 * s, y + 8 * s); g.stroke(); break;
+      case "aburrido":
+        rr(x - 32 * s, y - 4 * s, 64 * s, 30 * s, 12 * s); g.fill();
+        g.fillStyle = "#0b0f17"; g.beginPath(); g.arc(x + lookX * .5, y + 12 * s, 9 * s, 0, 7); g.fill();
+        g.fillStyle = col; break;
+      case "confundido": {
+        const r = side < 0 ? 34 * s : 20 * s;
+        g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+        g.fillStyle = "#0b0f17"; g.beginPath(); g.arc(x + lookX * .3, y, r * .4, 0, 7); g.fill();
+        g.fillStyle = col; break; }
+      default: { // atento, tranquilo, expectante
+        const w = (mood === "expectante" ? 72 : 60) * s, h = (mood === "expectante" ? 84 : 72) * s;
+        rr(x - w / 2, y - h / 2, w, h, 26 * s); g.fill();
+        g.fillStyle = "#0b0f17"; g.beginPath();
+        g.arc(x + lookX, y + lookY, (mood === "expectante" ? 15 : 13) * s, 0, 7); g.fill();
+        g.fillStyle = "#fff"; g.beginPath(); g.arc(x + lookX + 5 * s, y + lookY - 6 * s, 4 * s, 0, 7); g.fill();
+        g.fillStyle = col;
+      }
+    }
+  }
+  // boca y extras
+  const my = y + 62 * s; g.lineWidth = 6 * s;
+  g.beginPath();
+  if (["contento","encantado","atento"].includes(mood)) g.arc(cx, my - 16 * s, 20 * s, Math.PI * .2, Math.PI * .8);
+  else if (mood === "expectante") { g.arc(cx, my, 9 * s, 0, 7); }
+  else if (mood === "confundido") { g.moveTo(cx - 18 * s, my + 4 * s); g.quadraticCurveTo(cx, my - 8 * s, cx + 18 * s, my + 4 * s); }
+  else if (mood !== "dormido") { g.moveTo(cx - 16 * s, my); g.lineTo(cx + 16 * s, my); }
+  g.stroke();
+  if (mood === "encantado") { g.globalAlpha = .35; g.fillStyle = "#ff6fa8";
+    for (const side of [-1, 1]) { g.beginPath(); g.ellipse(cx + side * 120 * s, my - 10 * s, 18 * s, 10 * s, 0, 0, 7); g.fill(); }
+    g.globalAlpha = 1; }
+  g.font = `${Math.round(26 * s)}px system-ui`; g.fillStyle = col;
+  if (mood === "dormido") { const k = (now / 1000) % 3;
+    g.globalAlpha = 1 - k / 3; g.fillText("z", cx + 120 * s, y - 40 * s - k * 14 * s);
+    g.fillText("Z", cx + 145 * s, y - 70 * s - k * 14 * s); g.globalAlpha = 1; }
+  if (mood === "confundido") g.fillText("?", cx + 125 * s, y - 45 * s);
+}
+
+// ---------------------------------------------------------------- texto y barra
+const mmss = t => { t = Math.max(0, Math.floor(t || 0)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+
+function render() {
+  screen.classList.toggle("np", S.mode === "now_playing");
+  $("info2").textContent = `humor: ${S.mood}  ·  modo: ${S.mode}`;
+  const t = S.track;
+  if (t) {
+    $("title").textContent = t.title || "—";
+    $("artist").textContent = t.artist || "";
+    $("album").textContent = [t.album, t.year].filter(Boolean).join(" · ");
+    $("badge").style.display = t.from_vinyl ? "block" : "none";
+    if (t.cover && $("cover").dataset.src !== t.cover) { $("cover").src = t.cover; $("cover").dataset.src = t.cover; }
+  }
+  $("status").textContent = S.mode === "offline" ? "Charly no responde"
+    : S.mode === "idle" ? "" : (S.playback && S.playback.paused ? "en pausa" : "");
+}
+
+function tick(now) {
+  drawFace(now);
+  if (S.mode === "now_playing") {
+    const p = pos.paused ? pos.base : pos.base + (now - pos.at) / 1000;
+    const cur = Math.min(p, pos.dur || p);
+    $("bar").firstElementChild.style.width = pos.dur ? (100 * cur / pos.dur) + "%" : "0";
+    $("t0").textContent = mmss(cur); $("t1").textContent = mmss(pos.dur);
+  } else {
+    $("clock").textContent = new Date().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  }
+  requestAnimationFrame(tick);
+}
+
+let bubbleTimer;
+function apply(msg) {
+  if (msg.type === "message") {
+    $("bubble").textContent = msg.text; $("bubble").style.display = "block";
+    clearTimeout(bubbleTimer); bubbleTimer = setTimeout(() => $("bubble").style.display = "none", (msg.ttl_s || 20) * 1000);
+    return;
+  }
+  if (msg.type !== "state") return;
+  S = msg;
+  // La posicion se interpola con el reloj LOCAL desde que llego el mensaje:
+  // el reloj de la Pi y el del navegador no tienen por que coincidir.
+  const p = msg.playback || {};
+  pos = { base: p.position_sec || 0, at: performance.now(), dur: p.duration_sec || 0, paused: !!p.paused };
+  if (msg.event === "track_changed") bounceUntil = performance.now() + 700;
+  render();
+}
+
+// ---------------------------------------------------------------- conexion
+let ws, retry = 1000, demoTimer = null;
+function connect(key) {
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  if (ws) { ws.onclose = null; ws.close(); }
+  $("status").textContent = "conectando…";
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/companion/ws`);
+  ws.onopen = () => { retry = 1000; ws.send(JSON.stringify({ type: "hello", key, client: "preview" })); };
+  ws.onmessage = e => apply(JSON.parse(e.data));
+  ws.onclose = e => {
+    if (e.code === 4401) { $("status").textContent = "api key inválida"; return; }
+    S = { ...S, mode: "offline", mood: "confundido" }; render();
+    $("status").textContent = `sin conexión · reintento en ${retry / 1000}s`;
+    setTimeout(() => connect(key), retry); retry = Math.min(retry * 2, 10000);
+  };
+}
+
+// Demo: recorre todos los humores sin servidor, para iterar la cara.
+function demo() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  const moods = ["tranquilo","atento","contento","encantado","expectante","aburrido","dormido","confundido"];
+  const track = { youtube_id: "demo", title: "Gimme Shelter", artist: "The Rolling Stones", album: "Let It Bleed",
+                  year: 1969, cover: null, from_vinyl: true };
+  let i = 0;
+  const step = () => {
+    const mood = moods[i++ % moods.length];
+    const np = ["atento","contento","encantado","expectante"].includes(mood);
+    apply({ type: "state", mode: np ? "now_playing" : "idle", mood, event: np ? "track_changed" : null,
+            track: np ? { ...track, from_vinyl: mood === "encantado" } : null,
+            playback: np ? { paused: mood === "expectante", position_sec: 95, duration_sec: 271 } : null });
+    $("status").textContent = `demo · ${mood}`;
+  };
+  step(); demoTimer = setInterval(step, 4000);
+}
+
+$("go").onclick = () => { const k = $("key").value.trim(); if (k) { location.hash = "key=" + encodeURIComponent(k); connect(k); } };
+$("demo").onclick = demo;
+const fromHash = new URLSearchParams(location.hash.slice(1));
+if (fromHash.get("key")) { $("key").value = fromHash.get("key"); connect(fromHash.get("key")); }
+else if (fromHash.has("demo")) demo();
+else $("status").textContent = "ingresá la api key abajo, o probá la demo";
+render(); requestAnimationFrame(tick);
+</script>
+</body>
+</html>

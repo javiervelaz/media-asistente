@@ -16,6 +16,9 @@ _ENTEROS_H5 = {
     "harness_sugerencia_estante_dias": 90,
     "harness_sugerencia_min_envios": 10,
     "harness_sugerencia_gracia_horas": 3,
+    "companion_dormir_desde": 0,
+    "companion_dormir_hasta": 7,
+    "companion_aburrido_min": 20,
 }
 
 
@@ -109,6 +112,14 @@ class Settings(BaseSettings):
     # la playlist suena igual pero el mensaje final se pierde (y se loguea).
     telegram_bot_token: str = ""
 
+    # --- A0: compañero de escritorio (app/companion) ---
+    # Ventana horaria LOCAL (harness_tz) en la que, sin musica, el companero
+    # se duerme. desde > hasta cruza la medianoche (ej. 23 -> 7).
+    companion_dormir_desde: int = 0
+    companion_dormir_hasta: int = 7
+    # Minutos de silencio antes de ponerse "aburrido".
+    companion_aburrido_min: int = 20
+
     mb_user_agent: str = "Charly/1.0 ( javiervelaz@hotmail.com )"
 
     # --- validadores tolerantes -------------------------------------------
@@ -160,7 +171,10 @@ class Settings(BaseSettings):
     @field_validator("harness_sugerencia_dias_repetir",
                      "harness_sugerencia_estante_dias",
                      "harness_sugerencia_min_envios",
-                     "harness_sugerencia_gracia_horas", mode="before")
+                     "harness_sugerencia_gracia_horas",
+                     "companion_dormir_desde",
+                     "companion_dormir_hasta",
+                     "companion_aburrido_min", mode="before")
     @classmethod
     def _entero_tolerante(cls, v, info):
         """Un entero mal tipeado en un campo opcional cae al default y avisa.

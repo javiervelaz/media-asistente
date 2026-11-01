@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 from app import local_search, notify, player, tracks
 from app.auth import verify_api_key
+from app.companion.hub import hub as companion_hub
+from app.companion.routes import router as companion_router
 from app.harness import executors as harness_exec, goals
 from app.harness import render as harness_render
 from app.harness import sugerencias as harness_sug
@@ -60,10 +62,12 @@ async def lifespan(app: FastAPI):
                            crear_playlist=_harness_playlist,
                            lanzar_tracks=_harness_lanzar)
     yield
+    await companion_hub.cerrar()
     await close_pool()
 
 
 app = FastAPI(title="Media Asistente", version="0.4.0", lifespan=lifespan)
+app.include_router(companion_router)
 
 MAX_INTENTOS_CABEZA = 6   # candidatos que se caminan buscando uno que arranque
 
