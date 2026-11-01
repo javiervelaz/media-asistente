@@ -26,6 +26,7 @@ from app.harness.intents import Intent, Result
 from app.harness.session import SessionState
 from app.history import get_current, get_track_at, register_advance
 from app.player import MPVError
+from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -664,6 +665,12 @@ async def ejecutar(intent: Intent, st: SessionState) -> Result:
     except MPVError as e:
         logger.warning("mpv no respondio en %s: %s", intent.name, e)
         return Result(render.MPV_CAIDO, ok=False)
+    except HTTPException as e:
+        # Los ejecutores reusan los endpoints, y los endpoints hablan en
+        # HTTPException. El `detail` es justamente lo que el usuario necesita
+        # saber ("YouTube rechaza las descargas"); "error interno" lo tapaba.
+        logger.warning("%s fallo con %s: %s", intent.name, e.status_code, e.detail)
+        return Result(render.fallo_http(e.detail), ok=False)
     except Exception:
         logger.exception("fallo el ejecutor de %s", intent.name)
         return Result(render.error("error interno"), ok=False)

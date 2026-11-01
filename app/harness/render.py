@@ -185,6 +185,33 @@ def en_curso() -> str:
     """
     return "Lo estoy armando, tarda un toque. Te aviso apenas arranque."
 
+
+_MOTIVOS = {
+    "ytdlp_403": "YouTube rechaza las descargas (403)",
+    "pot_provider": "el POT provider no responde",
+    "timeout": "las descargas no terminan (timeout)",
+    "disco_lleno": "la Pi se quedó sin espacio",
+    "sin_match": "no encontré los temas en YouTube",
+}
+
+
+def fallo_http(detail) -> str:
+    """Un HTTPException de un endpoint, dicho para un humano.
+
+    El 404 de la cabeza trae `motivos` contados por causa: el que más pesó
+    es casi siempre el diagnóstico ("5 de 6 dieron 403" = YouTube, no los
+    temas).
+    """
+    if isinstance(detail, dict):
+        motivos = detail.get("motivos") or {}
+        if motivos:
+            causa, n = max(motivos.items(), key=lambda kv: kv[1])
+            total = detail.get("intentados") or sum(motivos.values())
+            return (f"No pude arrancar: {_MOTIVOS.get(causa, causa)} "
+                    f"({n} de {total} temas).")
+        detail = detail.get("error") or detail
+    return error(str(detail))
+
 # ============================================================== H2: lectura
 #
 # Todo lo de aca abajo reemplaza turnos que costaban ~19k tokens. Ninguna de

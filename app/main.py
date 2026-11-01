@@ -193,7 +193,16 @@ async def _bajar(t: dict) -> "tuple[str | None, str | None]":
         path = await tracks.obtener_track(yid)
     except tracks.TrackNoDisponible as e:
         logger.error("no se pudo bajar %s - %s: %s", t["artist"], t["title"], e)
-        await mark_failed(yid, str(e))
+        # Solo cuenta como falla DEL TRACK lo que es del track. Un 403, el POT
+        # caido, un timeout o el disco lleno son fallas del SISTEMA: le pegan a
+        # todos los temas por igual. Contarlas quemaba fail_count en masa —
+        # cada pedido sumaba 6, y a los 3 el cache tira resoluciones buenas
+        # que despues hay que volver a buscar en YouTube.
+        if _clasificar_motivo(str(e)) in _MOTIVOS_SISTEMICOS:
+            logger.info("falla sistemica (%s), no se marca %s",
+                        _clasificar_motivo(str(e)), yid)
+        else:
+            await mark_failed(yid, str(e))
         return None, str(e)
     player.registrar_track(path, yid)
     return str(path), None
@@ -205,6 +214,9 @@ async def _encolar(t: dict) -> bool:
         return False
     await player.enqueue_path(path)
     return True
+
+
+_MOTIVOS_SISTEMICOS = {"ytdlp_403", "pot_provider", "timeout", "disco_lleno"}
 
 
 def _clasificar_motivo(msg: "str | None") -> str:

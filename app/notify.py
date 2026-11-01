@@ -15,6 +15,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# httpx loguea cada request a INFO con la URL completa, y la URL de la Bot
+# API lleva el token adentro: quedaba escrito en ~/logs/media-api.log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 def chat_id_de(session_id: str) -> str | None:
     """`tg:937324746` -> `937324746`. Otro transporte -> None."""
