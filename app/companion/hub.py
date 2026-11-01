@@ -53,6 +53,11 @@ class Hub:
         self._ultimo_snap: dict | None = None
         self._silencio_desde = None
         self._yid_anterior: str | None = None
+        self._despertar = asyncio.Event()
+        # Un lock por cliente: el loop del hub y los acks de control escriben
+        # en el mismo socket desde tareas distintas. Sin esto dos frames
+        # pueden pisarse a mitad de camino.
+        self._locks: dict[WebSocket, asyncio.Lock] = {}
 
     # ------------------------------------------------------------ estado
 
@@ -99,26 +104,32 @@ class Hub:
 
     # ------------------------------------------------------------ clientes
 
+    async def enviar(self, ws: WebSocket, msg: dict) -> None:
+        lock = self._locks.setdefault(ws, asyncio.Lock())
+        async with lock:
+            await ws.send_json(msg)
+
     async def conectar(self, ws: WebSocket) -> None:
         self.clientes.add(ws)
         # El recien llegado no espera al proximo cambio: recibe el estado ya.
         snap = self._ultimo_snap or await self.snapshot()
-        await ws.send_json(self._mensaje({**snap, "event": None}))
+        await self.enviar(ws, self._mensaje({**snap, "event": None}))
         if self._tarea is None or self._tarea.done():
             self._tarea = asyncio.create_task(self._loop(), name="companion-hub")
 
     def desconectar(self, ws: WebSocket) -> None:
         self.clientes.discard(ws)
+        self._locks.pop(ws, None)
 
     async def _broadcast(self, msg: dict) -> None:
         caidos = []
         for ws in list(self.clientes):
             try:
-                await ws.send_json(msg)
+                await self.enviar(ws, msg)
             except Exception:
                 caidos.append(ws)
         for ws in caidos:
-            self.clientes.discard(ws)
+            self.desconectar(ws)
 
     async def enviar_texto(self, texto: str, ttl_s: float = 20.0) -> None:
         """Mensaje para mostrar en pantalla (A3: respuestas del chat). Ya
@@ -147,12 +158,21 @@ class Hub:
                     await self._broadcast(self._mensaje(snap))
                     self._ultima_clave = clave
                     self._ultimo_envio = time.monotonic()
-                await asyncio.sleep(POLL_S)
+                try:
+                    await asyncio.wait_for(self._despertar.wait(), POLL_S)
+                except asyncio.TimeoutError:
+                    pass
+                self._despertar.clear()
         finally:
             # Sin nadie mirando, la proxima conexion arranca de cero.
             self._ultima_clave = None
             self._ultimo_snap = None
             logger.info("companion: hub en pausa, no hay clientes")
+
+    def refrescar(self) -> None:
+        """Adelanta el proximo poll. Despues de un control (pausa, siguiente)
+        la pantalla no tiene que esperar el segundo del loop para enterarse."""
+        self._despertar.set()
 
     async def cerrar(self) -> None:
         for ws in list(self.clientes):
@@ -161,6 +181,7 @@ class Hub:
             except Exception:
                 pass
         self.clientes.clear()
+        self._locks.clear()
         if self._tarea and not self._tarea.done():
             self._tarea.cancel()
 

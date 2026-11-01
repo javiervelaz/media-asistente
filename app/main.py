@@ -13,6 +13,7 @@ from app import local_search, notify, player, tracks
 from app.auth import verify_api_key
 from app.companion.hub import hub as companion_hub
 from app.companion.routes import router as companion_router
+from app.companion.routes import set_controles as companion_controles
 from app.harness import executors as harness_exec, goals
 from app.harness import render as harness_render
 from app.harness import sugerencias as harness_sug
@@ -61,6 +62,19 @@ async def lifespan(app: FastAPI):
                            cancel_resto=_cancel_resto,
                            crear_playlist=_harness_playlist,
                            lanzar_tracks=_harness_lanzar)
+    # Los controles del companero (touch / botones del simulador) corren los
+    # mismos endpoints que Telegram. Se registran aca por el mismo motivo que
+    # los hooks del harness: el paquete companion no puede importar main.
+    companion_controles({
+        "toggle": _ctl_toggle,
+        "play": ctl_play,
+        "pause": ctl_pause,
+        "next": ctl_next,
+        "prev": ctl_prev,
+        "stop": ctl_stop,
+        "volume_up": lambda: ctl_volume(VolumeRequest(delta=5)),
+        "volume_down": lambda: ctl_volume(VolumeRequest(delta=-5)),
+    })
     yield
     await companion_hub.cerrar()
     await close_pool()
@@ -1079,6 +1093,15 @@ async def ctl_stop():
         return {"ok": True}
     except MPVError as e:
         raise HTTPException(503, str(e))
+
+
+async def _ctl_toggle():
+    """Play/pausa segun el estado actual. Es el gesto mas comun en una
+    pantalla touch: tocar y que haga lo obvio."""
+    st = await player.get_status()
+    if not st.get("mpv_ok"):
+        raise HTTPException(503, "mpv no responde")
+    return await (ctl_play() if st.get("paused") else ctl_pause())
 
 
 @app.post("/control/volume", dependencies=[Depends(verify_api_key)])

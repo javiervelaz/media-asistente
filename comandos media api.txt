@@ -224,6 +224,8 @@ tail -40 ~/logs/media-api.log
 
 tail -f ~/logs/media-api.log
 
+http://192.168.0.37:8000/companion/preview#key=kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo
+
 
 
 

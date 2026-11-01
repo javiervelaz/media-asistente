@@ -34,13 +34,25 @@
             background:#e8edf5; color:#0b0f17; font-size:17px; line-height:1.3; display:none; }
   .np #cover, .np #info { display:block; } .np #bar { display:block; } .np #times { display:flex; }
   .np #clock { display:none; }
-  #panel { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--dim); }
+  #wrap { width:480px; height:480px; transform-origin:top left; }
+  #screen { touch-action:none; user-select:none; -webkit-user-select:none; cursor:pointer; }
+  #flash { position:absolute; left:50%; top:50%; width:120px; height:120px; margin:-60px 0 0 -60px;
+           border-radius:60px; background:#000a; color:#fff; font-size:46px; display:flex;
+           align-items:center; justify-content:center; opacity:0; transition:opacity .35s; pointer-events:none; }
+  #flash.on { opacity:1; transition:none; }
+  #controls { display:flex; gap:10px; }
+  #controls button { width:64px; height:56px; font-size:24px; border:0; border-radius:14px; background:#2a3448;
+                     color:var(--fg); touch-action:manipulation; cursor:pointer; }
+  #controls button:active { background:#3d4a66; transform:scale(.96); }
+  #controls button.main { width:84px; background:#33507a; }
+  #hint { font-size:12px; color:var(--dim); text-align:center; max-width:480px; }
+  #panel { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; align-items:center; font-size:13px; color:var(--dim); }
   #panel input { background:#0b0f17; color:var(--fg); border:1px solid #334; border-radius:6px; padding:6px 8px; width:220px; }
   #panel button { background:#2a3448; color:var(--fg); border:0; border-radius:6px; padding:7px 12px; cursor:pointer; }
 </style>
 </head>
 <body>
-<div id="screen">
+<div id="wrap"><div id="screen">
   <canvas id="face" width="480" height="320"></canvas>
   <img id="cover" alt="">
   <div id="info">
@@ -52,7 +64,17 @@
   <div id="clock"></div>
   <div id="status">conectando…</div>
   <div id="bubble"></div>
+  <div id="flash"></div>
+</div></div>
+<div id="controls">
+  <button data-a="prev" title="anterior">⏮</button>
+  <button data-a="volume_down" title="bajar volumen">🔉</button>
+  <button data-a="toggle" class="main" title="play / pausa">⏯</button>
+  <button data-a="volume_up" title="subir volumen">🔊</button>
+  <button data-a="next" title="siguiente">⏭</button>
 </div>
+<div id="hint">En la pantalla: tocá = play/pausa · deslizá ← siguiente · → anterior · ↑↓ volumen.<br>
+Son los mismos gestos que va a tener la placa.</div>
 <div id="panel">
   <span id="info2">humor: —</span>
   <input id="key" type="password" placeholder="api key de Charly">
@@ -200,7 +222,7 @@ function connect(key) {
   $("status").textContent = "conectando…";
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/companion/ws`);
   ws.onopen = () => { retry = 1000; ws.send(JSON.stringify({ type: "hello", key, client: "preview" })); };
-  ws.onmessage = e => apply(JSON.parse(e.data));
+  ws.onmessage = e => { const m = JSON.parse(e.data); m.type === "ack" ? onAck(m) : apply(m); };
   ws.onclose = e => {
     if (e.code === 4401) { $("status").textContent = "api key inválida"; return; }
     S = { ...S, mode: "offline", mood: "confundido" }; render();
@@ -226,6 +248,45 @@ function demo() {
   };
   step(); demoTimer = setInterval(step, 4000);
 }
+
+// ---------------------------------------------------------------- controles
+const ICON = { toggle:"⏯", play:"▶", pause:"⏸", next:"⏭", prev:"⏮", stop:"⏹", volume_up:"🔊", volume_down:"🔉" };
+let flashTimer;
+function flash(txt) {
+  const f = $("flash"); f.textContent = txt; f.classList.add("on");
+  clearTimeout(flashTimer); flashTimer = setTimeout(() => f.classList.remove("on"), 450);
+}
+function control(action) {
+  flash(ICON[action] || "•");
+  if (navigator.vibrate) navigator.vibrate(15);
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "control", action }));
+  else if (!demoTimer) $("status").textContent = "sin conexión: no se pudo mandar";
+}
+function onAck(m) {
+  if (!m.ok) { $("status").textContent = `no pude (${m.action}): ${m.error}`; flash("✕"); }
+}
+document.querySelectorAll("#controls button").forEach(b => b.onclick = () => control(b.dataset.a));
+
+// Gestos sobre la pantalla: los mismos que va a tener el touch de la placa.
+let down = null;
+$("screen").addEventListener("pointerdown", e => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+$("screen").addEventListener("pointerup", e => {
+  if (!down) return;
+  const dx = e.clientX - down.x, dy = e.clientY - down.y, ax = Math.abs(dx), ay = Math.abs(dy);
+  down = null;
+  if (ax < 30 && ay < 30) return control("toggle");
+  if (ax > ay) control(dx < 0 ? "next" : "prev");
+  else control(dy < 0 ? "volume_up" : "volume_down");
+});
+
+// En el celular la "placa" de 480 px no entra: se escala sin tocar el layout.
+function fit() {
+  const k = Math.min(1, (window.innerWidth - 24) / 480);
+  $("wrap").style.transform = `scale(${k})`;
+  $("wrap").style.width = 480 * k + "px"; $("wrap").style.height = 480 * k + "px";
+  $("wrap").style.marginBottom = 0;
+}
+window.addEventListener("resize", fit); fit();
 
 $("go").onclick = () => { const k = $("key").value.trim(); if (k) { location.hash = "key=" + encodeURIComponent(k); connect(k); } };
 $("demo").onclick = demo;

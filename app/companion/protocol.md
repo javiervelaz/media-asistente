@@ -38,6 +38,22 @@ Se manda al conectar, cada vez que cambia algo que se ve y como latido cada 15 s
 ```
 Se muestra como globo durante `ttl_s` segundos.
 
+## `control`: del cliente a Charly
+El touch de la placa y los botones del simulador mandan, por el mismo WebSocket:
+```json
+{ "type": "control", "action": "next" }
+```
+Acciones: `toggle` (play/pausa según el estado), `play`, `pause`, `next`, `prev`, `stop`, `volume_up`, `volume_down` (±5).
+
+Corren **el mismo código que `/control/*`**: cancelan el fade y `next`/`prev` registran el avance en `play_history`, igual que desde Telegram. Charly responde solo a ese cliente:
+```json
+{ "type": "ack", "action": "next", "ok": true }
+{ "type": "ack", "action": "next", "ok": false, "error": "mpv no responde" }
+```
+El nuevo `state` llega enseguida (~150 ms), sin esperar el próximo poll.
+
+**Gestos de referencia** (simulador y placa): tocar = `toggle`, deslizar ← = `next`, → = `prev`, ↑ = `volume_up`, ↓ = `volume_down`.
+
 ## Compatibilidad
 - Campos nuevos se agregan sin subir `v`. Un cliente **ignora lo que no conoce**.
 - `v` sube solo si cambia el significado de un campo existente.

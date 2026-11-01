@@ -21,7 +21,7 @@ from starlette.websockets import WebSocketDisconnect
 from app.companion import hub as hub_mod
 from app.companion import state
 from app.companion.mood import Contexto, en_ventana, humor
-from app.companion.routes import router
+from app.companion.routes import router, set_controles
 from app.config import settings
 
 fallas: list[str] = []
@@ -169,6 +169,40 @@ with TestClient(app) as client:
     except WebSocketDisconnect as e:
         codigo = e.code
     check("key mala -> 4401", codigo == 4401, f"code={codigo}")
+
+    # Controles: registrados como en main.py, con fakes que anotan la llamada.
+    llamadas: list[str] = []
+
+    async def fake_next():
+        llamadas.append("next")
+
+    async def fake_pause():
+        raise RuntimeError("mpv no responde")
+
+    set_controles({"next": fake_next, "pause": fake_pause})
+    with client.websocket_connect("/companion/ws", headers={"x-api-key": KEY}) as ws:
+        ws.receive_json()                      # estado inicial
+
+        def ack_de(accion):
+            ws.send_json({"type": "control", "action": accion})
+            for _ in range(50):
+                m = ws.receive_json()
+                if m.get("type") == "ack":
+                    return m
+            return {}
+
+        a = ack_de("next")
+        check("control next -> corre el handler", llamadas == ["next"] and a.get("ok") is True)
+        a = ack_de("pause")
+        check("control que falla -> ack ok=false con error",
+              a.get("ok") is False and "mpv" in (a.get("error") or ""))
+        a = ack_de("volar")
+        check("accion desconocida -> ack ok=false", a.get("ok") is False)
+    try:
+        set_controles({"autodestruccion": fake_next})
+        check("set_controles rechaza acciones fuera del protocolo", False)
+    except ValueError:
+        check("set_controles rechaza acciones fuera del protocolo", True)
 
     r = client.get("/companion/preview")
     check("preview se sirve", r.status_code == 200 and "480" in r.text)
