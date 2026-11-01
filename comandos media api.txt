@@ -204,6 +204,13 @@ curl -s -H "X-API-Key: kRXbTBDpPUMF1MiLX3YCAT2SAdJzdsguLHzT1kTJSqo" \
 https://api.telegram.org/bot8279770661:AAEvCci5tezS0fMhxx1g5k1QJQYNjFZXC78/sendMessage
 
 
+python -m scripts.spike_mezcla "Charly García" "Depeche Mode" --dry-run
+
+python -m scripts.spike_mezcla "Charly García" "Depeche Mode" --play
+
+python -m scripts.spike_mezcla "Charly García" "Depeche Mode" --completo
+
+
 capacidad del disco rasp
 df -h / 
 

@@ -1,0 +1,20 @@
+consumo de tokens charly
+
+julio
+Total de tokens de entrada
+71,701
+Total de tokens de salida
+45,532
+
+agos
+Total de tokens de entrada
+2,450,063
+Total de tokens de salida
+228,957
+
+sep
+Total de tokens de entrada
+1,676,640
+Total de tokens de salida
+110,423
+
