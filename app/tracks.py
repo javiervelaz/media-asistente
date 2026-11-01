@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 YTDLP = os.environ["YTDLP_BIN"]
 RUNTIME = os.environ["YTDLP_JS_RUNTIME"]
-CLIENT = os.environ.get("YT_PLAYER_CLIENT", "mweb")
+# Vacio = que yt-dlp elija los clientes. Forzar `mweb` daba 403 en TODAS las
+# descargas (31/10) mientras yt-dlp a secas bajaba el mismo tema sin
+# problema: los clientes que funcionan cambian cada pocas semanas y yt-dlp
+# los actualiza en cada release. Fijarlo solo para probar uno a mano.
+CLIENT = os.environ.get("YT_PLAYER_CLIENT", "").strip()
 POT = os.environ["POT_PROVIDER_URL"]
 CACHE = Path(os.environ["TRACK_CACHE_DIR"])
 MAX_BYTES = int(os.environ.get("TRACK_CACHE_GB", "4")) * 1024**3
@@ -92,7 +96,8 @@ async def _descargar(yid: str, dest_dir: Path, formato: str,
         proc = await asyncio.create_subprocess_exec(
             YTDLP, "--js-runtimes", RUNTIME,
             "-f", formato, "--no-playlist", "--no-progress",
-            "--extractor-args", f"youtube:player_client={CLIENT}",
+            *(["--extractor-args", f"youtube:player_client={CLIENT}"]
+              if CLIENT else []),
             "--extractor-args", f"youtubepot-bgutilhttp:base_url={POT}",
             "-o", str(salida),
             f"https://www.youtube.com/watch?v={yid}",
